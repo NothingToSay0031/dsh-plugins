@@ -1,0 +1,12 @@
+{
+  "name": "@local/dsh-compaction-envelope",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Give compaction summarizer calls the conversation's routed reasoning effort so they reuse the provider prompt cache.",
+  "exports": { ".": "./index.js", "./locale/*.json": "./locale/*.json", "./icon": "./icon.svg" },
+  "files": ["index.js", "envelope.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md"],
+  "scripts": { "test": "node --test test/*.test.js" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+}

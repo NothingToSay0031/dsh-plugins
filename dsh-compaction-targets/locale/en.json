@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Compaction Targets",
+    "description": "Edit per-model compaction points plus the retained tail, headroom and summarizer output cap, then write them atomically to the desktop profile patch and disable tool-result pruning in the selected presets."
+  }
+}

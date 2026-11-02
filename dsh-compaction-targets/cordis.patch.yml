@@ -1,0 +1,3 @@
+- insert:
+    - id: compaction-targets
+      name: '@local/dsh-compaction-targets'

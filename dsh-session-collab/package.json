@@ -1,0 +1,16 @@
+{
+  "name": "@local/dsh-session-collab",
+  "version": "2.2.1",
+  "private": true,
+  "type": "module",
+  "description": "Autonomous peer Session collaboration, difficulty-ranked model selection and named read-only logs for DeepSeek Harness.",
+  "license": "MIT",
+  "exports": { ".": "./index.js", "./client": "./client.js", "./locale/*.json": "./locale/*.json", "./icon": "./icon.svg" },
+  "files": ["index.js", "core.js", "contracts.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md"],
+  "dependencies": { "zod": "^4.1.0" },
+  "scripts": { "test": "node --test test/*.test.js", "check": "node --check index.js && node --check core.js && node --check contracts.js && node --check client.js" },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web", "immediately": true, "inject": ["@deepseek-ai/dsh-client-ui-sidebar", "@deepseek-ai/dsh-client-ui-workspace", "@deepseek-ai/dsh-client-connection", "@deepseek-ai/dsh-client-locale"] }
+  }
+}

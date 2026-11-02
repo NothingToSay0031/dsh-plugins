@@ -1,0 +1,3 @@
+- insert:
+    - id: local-session-collab
+      name: '@local/dsh-session-collab'

@@ -1,0 +1,3 @@
+{
+  "meta": { "title": "Compaction Envelope", "description": "Carry the session's routed reasoning effort into compaction summarizer calls so they reuse the provider's prompt cache; every other call passes through unchanged." }
+}

@@ -1,0 +1,3 @@
+- insert:
+    - id: local-model-control
+      name: '@local/dsh-model-control'

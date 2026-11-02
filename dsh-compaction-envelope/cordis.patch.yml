@@ -1,0 +1,3 @@
+- insert:
+    - id: compaction-envelope
+      name: '@local/dsh-compaction-envelope'

@@ -1,0 +1,13 @@
+{
+  "name": "@local/dsh-model-control",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Compatible maximum-effort model switching and per-reply model provenance for DeepSeek Harness. Context budgets live in the upstream models proxy.",
+  "exports": { ".": "./index.js", "./client": "./client.js", "./locale/*.json": "./locale/*.json", "./icon": "./icon.svg" },
+  "files": ["index.js", "contracts.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md"],
+  "dependencies": { "zod": "^4.1.0" },
+  "scripts": { "test": "node --test test/*.test.js" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "immediately": true, "inject": ["@deepseek-ai/dsh-client-ui-chat", "@deepseek-ai/dsh-client-ui-model-selection", "@deepseek-ai/dsh-client-ui-sidebar", "@deepseek-ai/dsh-client-connection", "@deepseek-ai/dsh-client-locale"] } }
+}
