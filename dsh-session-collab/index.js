@@ -51,7 +51,7 @@ export async function apply(ctx) {
   });
 
   // Desktop and Web share the same authenticated owner-only /api exact-Fetch carrier.
-  // No UI endpoint can send, reply, create, or edit participation. Humans only order models and inspect logs.
+  // No UI endpoint can send, reply, create, or edit participation. Humans only order models.
   ctx.connection.fetch.register({
     path: '/api/session-collab', methods: ['POST'], requestBody: 'buffered',
     async fetch(request) {
@@ -68,7 +68,6 @@ export async function apply(ctx) {
         const value = await service.run(async () => {
           if (method === 'snapshot') { z.object({}).strict().parse(args); return service.snapshot(); }
           if (method === 'ranking') return service.saveRanking(rankingSchema.parse(args));
-          if (method === 'logs') return service.logPage(z.object({ before: string.optional() }).strict().parse(args));
           throw new Error(`Unknown collaboration endpoint: ${method}`);
         });
         return response({ ok: true, value: wire(value) });

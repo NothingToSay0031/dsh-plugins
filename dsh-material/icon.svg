@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Material layer">
+  <defs>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7fd2ff"/>
+      <stop offset="0.55" stop-color="#5b8cff"/>
+      <stop offset="1" stop-color="#b07cff"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.10"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#0e1322"/>
+  <rect x="13" y="24" width="34" height="26" rx="9" fill="url(#glass)" opacity="0.40"/>
+  <rect x="17" y="18" width="34" height="26" rx="9" fill="url(#glass)" opacity="0.65"/>
+  <rect x="17" y="18" width="34" height="26" rx="9" fill="none" stroke="#dce8ff" stroke-opacity="0.55" stroke-width="1.5"/>
+  <path d="M21 22h26M21 22a4 4 0 0 0-4 4v14" fill="none" stroke="url(#sheen)" stroke-width="3" stroke-linecap="round"/>
+</svg>

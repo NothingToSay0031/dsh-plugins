@@ -17,6 +17,29 @@ const text = (value, field, max = 16000) => {
 };
 const keyOf = (from, kind, key) => `collab-${kind}-${hash([from, text(key, 'request_id', 160)]).slice(0, 40)}`;
 const nameKey = value => String(value ?? '').normalize('NFKC').trim().toLowerCase();
+/** Newest delivery records kept for idempotency, reply routing and rate limits. */
+const MAX_REQUESTS = 2000;
+/** Records younger than this are never pruned, so rate limiting and idempotency stay exact. */
+const REQUEST_RETENTION_MS = 60000;
+/** Cold Session logs read at the same time. One workspace log reaches tens of MB. */
+const MAX_LOG_READS = 2;
+/** Cold Session logs read per page, so one inbox page cannot turn into a hundred reads. */
+const MAX_LOG_READS_PER_CALL = 4;
+/** How long a negative acceptance result is trusted before the log is read again. */
+const EVIDENCE_TTL_MS = 60000;
+
+/** Counting semaphore that hands its slot straight to the next waiter. */
+class Semaphore {
+  constructor(limit) { this.limit = limit; this.active = 0; this.waiters = []; }
+  async acquire() {
+    if (this.active >= this.limit) await new Promise(resolve => this.waiters.push(resolve));
+    else this.active += 1;
+  }
+  release() {
+    const next = this.waiters.shift();
+    if (next) next(); else this.active -= 1;
+  }
+}
 const freeze = value => {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) { Object.freeze(value); Object.values(value).forEach(freeze); }
   return value;
@@ -30,6 +53,10 @@ export class Collaboration {
     this.createdLimit = options.createdLimit ?? 24; this.perMinute = options.perMinute ?? 40;
     this.catalogCache = null;
     this.shutdown = new AbortController();
+    // Acceptance evidence for a closed target lives in that Session's log, and
+    // one workspace log reaches tens of MB, so the reads are bounded, grouped
+    // by target, and remembered instead of repeated for every call.
+    this.evidence = new Map(); this.evidenceCursor = 0; this.logReads = new Semaphore(MAX_LOG_READS);
   }
   async run(fn) {
     if (this.stopping) fail('STOPPED', 'Session collaboration is stopping');
@@ -379,29 +406,136 @@ export class Collaboration {
     const resolved = await this.ctx.llm.resolveCallConfig({ ...route, ...(chosen ? { reasoningEffort: chosen } : {}) }, signal);
     return { provider: resolved.provider, model: resolved.model, ...(resolved.reasoningEffort ? { reasoningEffort: resolved.reasoningEffort } : {}) };
   }
+  /** Evidence already known for one record, without reading any Session log. */
+  knownEvidence(record) {
+    if (record.kind !== 'send') return undefined;
+    if (record.evidence) return record.evidence;
+    const cached = this.evidence.get(record.id);
+    return cached ? cached.evidence ?? undefined : undefined;
+  }
+  /**
+   * Whether one record still needs its target Session log read.
+   *
+   * A record is settled once its message was admitted into a model step. A
+   * message that was only spliced into the inbox is re-checked after a grace
+   * period, so a target that never admits it is not read on every call.
+   */
+  evidenceStale(record) {
+    const cached = this.evidence.get(record.id);
+    const settled = cached?.evidence ?? record.evidence;
+    if (settled?.admittedSeq != null) return false;
+    if (!cached) return true;
+    return Date.now() - cached.at >= EVIDENCE_TTL_MS;
+  }
+  /** Shape one public record from the evidence that is already known. */
+  shape(record) {
+    if (record.kind !== 'send') return clone(record);
+    let evidence = this.knownEvidence(record);
+    const session = this.ctx.sessions.get(record.to);
+    if (session) evidence = this.ctx.sessionProjections.stateOf(session, PROJECTION)?.receipts?.[record.message.id] ?? evidence;
+    return { ...clone(record), ...(evidence ? { evidence: clone(evidence) } : {}), sessionMessageId: record.message.id, accepted: record.state === 'accepted', admitted: evidence?.admittedSeq != null };
+  }
+  /**
+   * Read one target Session log and collect the acceptance evidence of every
+   * record that targets it. One log serves all of its records, and the result
+   * is remembered so a later call does not read the log again.
+   */
+  async readEvidenceFor(sessionId, records) {
+    const found = new Map();
+    await this.logReads.acquire();
+    try {
+      let observation;
+      try {
+        observation = await this.ctx.sessionQuery.observeSession(sessionId, { projectionMode: 'none' });
+      } catch {
+        return found; // No evidence never turns an uncertain delivery into a failure.
+      }
+      try {
+        const folded = observation.events.reduce(receiptFold, { receipts: {} });
+        for (const record of records) {
+          const evidence = folded.receipts[record.message.id];
+          if (!evidence) { this.evidence.set(record.id, { evidence: null, at: Date.now() }); continue; }
+          found.set(record.id, evidence);
+          this.evidence.set(record.id, { evidence, at: Date.now() });
+          await this.persistEvidence(record.id, evidence);
+        }
+      } finally {
+        observation[Symbol.dispose]();
+      }
+    } finally {
+      this.logReads.release();
+    }
+    return found;
+  }
+  /** Keep a durable copy of the evidence so a restart does not read the log again. */
+  async persistEvidence(id, evidence) {
+    try {
+      await this.requests.update(id, current => current.evidence?.admittedSeq != null ? current : { ...current, evidence });
+    } catch { /* A durable copy is best effort. */ }
+  }
+  /**
+   * Resolve the acceptance evidence of a page of records.
+   *
+   * Reading a closed Session log costs tens of MB, so the logs are grouped by
+   * target, only a bounded number are read per call, and the next call
+   * continues with the records that are still missing evidence.
+   */
+  async resolveEvidence(records) {
+    const pending = new Map();
+    for (const record of records) {
+      if (record.kind !== 'send') continue;
+      if (this.ctx.sessions.get(record.to)) continue; // A live Session answers from its projection.
+      if (!this.evidenceStale(record)) continue;
+      const list = pending.get(record.to) ?? [];
+      list.push(record);
+      pending.set(record.to, list);
+    }
+    if (pending.size === 0) return;
+    const groups = [...pending.entries()];
+    const budget = Math.min(MAX_LOG_READS_PER_CALL, groups.length);
+    for (let index = 0; index < budget; index += 1) {
+      const [sessionId, group] = groups[(this.evidenceCursor + index) % groups.length];
+      await this.readEvidenceFor(sessionId, group);
+    }
+    this.evidenceCursor = (this.evidenceCursor + budget) % groups.length;
+  }
+  /**
+   * Delivery state is durable, so it keeps only the newest records.
+   *
+   * A collaboration run that never prunes grows the Plugin Host heap and its
+   * on-disk domain for as long as it runs.
+   */
+  async pruneRequests() {
+    const total = this.requests.size;
+    if (total <= MAX_REQUESTS) return;
+    const records = [...this.requests.entries()].map(([, r]) => r).sort((a, b) => a.createdAt - b.createdAt);
+    const excess = total - MAX_REQUESTS;
+    const stale = records.filter(r => r.createdAt < Date.now() - REQUEST_RETENTION_MS).slice(0, excess);
+    if (stale.length === 0) return;
+    try {
+      await this.requests.deleteMany(stale.map(r => r.id));
+    } catch {
+      return; // Pruning is housekeeping; a failed prune never fails a delivery.
+    }
+    for (const record of stale) this.evidence.delete(record.id);
+  }
   async receipt(record) {
     if (record.kind !== 'send') return clone(record);
-    let evidence = record.evidence;
-    const session = this.ctx.sessions.get(record.to);
-    if (session) evidence = this.ctx.sessionProjections.stateOf(session, PROJECTION)?.[record.message.id] ?? evidence;
-    else if (!evidence || evidence.admittedSeq == null) {
-      try {
-        const observation = await this.ctx.sessionQuery.observeSession(record.to, { projectionMode: 'none' });
-        try { evidence = observation.events.reduce(receiptFold, {})[record.message.id] ?? evidence; }
-        finally { observation[Symbol.dispose](); }
-      } catch { /* No evidence never turns an uncertain delivery into a failure. */ }
+    if (!this.ctx.sessions.get(record.to) && this.evidenceStale(record)) {
+      await this.readEvidenceFor(record.to, [record]);
     }
-    return { ...clone(record), ...(evidence ? { evidence: clone(evidence) } : {}), sessionMessageId: record.message.id, accepted: record.state === 'accepted', admitted: evidence?.admittedSeq != null };
+    return this.shape(record);
   }
   async publicRecords(records) {
     const names = await this.namesFor(records.flatMap(r => [r.from, r.to]));
-    return Promise.all(records.map(async record => {
-      const result = await this.receipt(record);
+    await this.resolveEvidence(records);
+    return records.map(record => {
+      const result = this.shape(record);
       delete result.message; delete result.fingerprint;
       result.fromName = names.get(record.from) || record.fromName || '未命名会话';
       result.toName = names.get(record.to) || record.toName || record.title || '已删除会话';
       return result;
-    }));
+    });
   }
   limit(agent, kind) {
     const records = [...this.requests.entries()].map(([, r]) => r).filter(r => r.from === agent.id);
@@ -452,6 +586,7 @@ export class Collaboration {
         record = { ...record, state: 'accepted', updatedAt: Date.now() };
       } catch (error) { record = { ...record, state: inserted ? 'unknown' : 'rejected', error: String(error), updatedAt: Date.now() }; }
       await this.requests.put(id, record);
+      await this.pruneRequests();
       return (await this.publicRecords([record]))[0];
     });
   }
@@ -476,12 +611,13 @@ export class Collaboration {
   }
   async inbox(agent, input = {}) {
     this.assertLive(agent);
-    return { self: { sessionId: agent.id, name: await this.sessionName(agent.id) }, ...await this.logPage(input, agent.id, 20) };
+    return { self: { sessionId: agent.id, name: await this.sessionName(agent.id) }, ...await this.inboxPage(input, agent.id, 20) };
   }
-  async logPage(input = {}, sessionId, size = 100) {
-    const records = [...this.requests.entries()].map(([, r]) => r).filter(r => (!sessionId || r.from === sessionId || r.to === sessionId) && (!input.thread_id || r.threadId === input.thread_id)).sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+  /** One page of the calling Session's own collaboration messages; Agent inbox only, no UI log. */
+  async inboxPage(input = {}, sessionId, size = 100) {
+    const records = [...this.requests.entries()].map(([, r]) => r).filter(r => (r.from === sessionId || r.to === sessionId) && (!input.thread_id || r.threadId === input.thread_id)).sort((a, b) => b.createdAt - a.createdAt || b.id.localeCompare(a.id));
     const start = input.before ? records.findIndex(r => r.id === input.before) + 1 : 0;
-    if (input.before && !start) fail('INVALID_CURSOR', 'Unknown log cursor');
+    if (input.before && !start) fail('INVALID_CURSOR', 'Unknown inbox cursor');
     const page = records.slice(start, start + size);
     return { items: await this.publicRecords(page), nextCursor: start + size < records.length ? page.at(-1).id : null };
   }
@@ -531,7 +667,9 @@ export class Collaboration {
         const permissionPreset = this.ctx.get('permissionPresets')?.current(handle.agent.session);
         record = { ...record, state: 'created', updatedAt: Date.now(), ...(permissionPreset ? { permissionPreset } : {}) };
       } catch (error) { record = { ...record, state: creating ? 'unknown' : 'rejected', error: String(error), updatedAt: Date.now() }; }
-      await this.requests.put(id, record); return record;
+      await this.requests.put(id, record);
+      await this.pruneRequests();
+      return record;
     });
     const result = (await this.publicRecords([created]))[0];
     if (created.state === 'created' && input.prompt) {
@@ -554,8 +692,7 @@ export class Collaboration {
         models.push({ ...row, ...(highestEffort ? { highestEffort } : {}) });
       } catch { models.push({ ...row, available: false }); }
     }
-    const page = await this.logPage();
-    return { version: 2, ranking, models, sessions: await this.sessionRows(), logs: page.items, logsHasMore: page.nextCursor !== null, nextCursor: page.nextCursor };
+    return { version: 2, ranking, models };
   }
   async close() {
     this.stopping = true;

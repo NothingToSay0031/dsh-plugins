@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session reaper",
+    "description": "Keeps historical session payloads on disk and re-reads them on demand, and reclaims rebuildable session caches when memory is tight."
+  }
+}

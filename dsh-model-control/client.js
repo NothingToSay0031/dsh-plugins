@@ -3,12 +3,13 @@ window.__ModuleLoader__.load({
   factory(require) {
     const React = require('react');
     const h = React.createElement;
+    const { MenuSurface, IconSearchOutlineRegular, IconCloseFillRegular } = require('@deepseek-ai/dsh-client-ui-primitives');
     const PACKAGE = '@local/dsh-model-control';
     const PROVENANCE = 'localModelReplyProvenance';
     const NS = 'local-model-control';
     const en = {
       title: 'Model Control', description: 'Provider context budgets, compatible model switching, and per-reply model details.',
-      model: 'Model', effort: 'Reasoning effort', providerDefault: 'Default', search: 'Search models…',      chooseModel: 'Select model', loading: 'Loading…', retry: 'Retry', noModels: 'No available models.', noMatch: 'No matching models.',
+      model: 'Model', effort: 'Reasoning effort', providerDefault: 'Default', search: 'Search models…', clearSearch: 'Clear search',      chooseModel: 'Select model', loading: 'Loading…', retry: 'Retry', noModels: 'No available models.', noMatch: 'No matching models.',
       selectionFailed: 'Model selection failed', unavailable: 'Model selection is unavailable for this session.',
       settingsUnavailable: 'Model Control settings could not be loaded. Retry before choosing a model.',
       unknownModel: 'Unknown model', unknownEffort: 'Unknown effort', noEffort: 'No reasoning / unspecified',
@@ -34,7 +35,7 @@ window.__ModuleLoader__.load({
     };
     const zh = {
       title: '模型控制', description: '提供方上下文预算、兼容的模型切换，以及每条回复的实际模型。',
-      model: '模型', effort: '思考强度', providerDefault: 'Default（提供方默认）', search: '搜索模型…',
+      model: '模型', effort: '思考强度', providerDefault: 'Default（提供方默认）', search: '搜索模型…', clearSearch: '清空搜索',
       chooseModel: '选择模型', loading: '正在加载…', retry: '重试', noModels: '没有可用模型。', noMatch: '没有匹配模型。',
       selectionFailed: '模型选择失败', unavailable: '此会话不可独立选择模型。',
       settingsUnavailable: '无法加载模型控制设置，请重试后再选择模型。',
@@ -68,8 +69,30 @@ window.__ModuleLoader__.load({
 .lmc-trigger-text{display:var(--dsh-composer-model-text-display,block);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lmc-trigger-icon{display:var(--dsh-composer-model-icon-display,none);flex:none}
 .lmc-caption{color:var(--dsw-alias-label-secondary)}
-.lmc-menu{position:absolute;right:0;bottom:calc(100% + 8px);z-index:1100;width:min(360px,calc(100vw - 48px));max-height:min(440px,65vh);overflow:auto;padding:9px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);box-shadow:0 5px 22px var(--dsw-alias-border-l1);font-size:13px;line-height:1.5}
-.lmc-menu-title{font-weight:600;margin:3px 3px 7px}.lmc-group-label{color:var(--dsw-alias-label-secondary);font-size:11px;font-weight:600;padding:10px 7px 4px;overflow-wrap:anywhere}
+.lmc-menu{position:absolute;right:0;bottom:calc(100% + 8px);z-index:1100;box-sizing:border-box;display:flex;flex-direction:column;width:min(360px,calc(100vw - 48px));max-height:min(440px,65vh);padding:9px;border:0;border-radius:10px;color:var(--dsw-alias-label-primary);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2);--dsh-scrollbar-thumb-hover:var(--dsw-alias-scrollbar-hover-l2);font-size:13px;line-height:1.5}
+/* The card is the shared menu material: MenuSurface paints the theme-owned fill
+ * and blur (--dsw-menu-surface-fill + --dsw-menu-backdrop-filter), so the
+ * picker is the same frosted panel as every other menu and follows whatever
+ * the material layer writes into those two tokens. The card owns geometry
+ * only; the body owns the scrolling, because an absolutely positioned
+ * material inside a scrolled box would scroll away from its card. */
+.lmc-menu-body{min-height:0;overflow-y:auto;overscroll-behavior:contain}
+.lmc-menu-head{flex:none;padding-bottom:5px}
+.lmc-menu-title{font-weight:600;margin:2px 2px 8px}.lmc-group-label{color:var(--dsw-alias-label-secondary);font-size:11px;font-weight:600;padding:10px 7px 4px;overflow-wrap:anywhere}
+/* The search field is an inset well inside the frosted card: a hairline edge,
+ * a soft fill, a magnifier, and a clear control that only shows up with a
+ * query. Theme tokens only, so every material preset and both themes follow. */
+.lmc-search{display:flex;align-items:center;gap:7px;box-sizing:border-box;height:32px;padding:0 5px 0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:9px;background:var(--dsw-alias-bg-layer-1);transition:border-color .15s ease,background .15s ease,box-shadow .15s ease}
+.lmc-search:hover{border-color:var(--dsw-alias-border-l3);background:var(--dsw-alias-bg-layer-2)}
+.lmc-search:focus-within{border-color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-bg-layer-2);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary)) 18%,transparent)}
+.lmc-search-icon{flex:none;display:inline-flex;align-items:center;justify-content:center;color:var(--dsw-alias-label-tertiary);transition:color .15s ease}
+.lmc-search:focus-within .lmc-search-icon{color:var(--dsw-alias-label-secondary)}
+.lmc-search-input{flex:1;min-width:0;height:100%;padding:0;border:0;outline:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:1.4}
+.lmc-search-input::placeholder{color:var(--dsw-alias-label-tertiary);opacity:1}
+.lmc-search-input::-webkit-search-cancel-button,.lmc-search-input::-webkit-search-decoration{-webkit-appearance:none}
+.lmc-search-clear{flex:none;display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;border:0;border-radius:50%;background:transparent;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.lmc-search-clear:hover{background:var(--dsw-alias-interactive-bg-hover)}
+.lmc-search-clear:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .lmc-option{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:7px;border:0;border-radius:6px;background:transparent;color:inherit;text-align:left;font:inherit;cursor:pointer}
 .lmc-option[aria-checked=true]{background:var(--dsw-alias-bg-layer-2)}.lmc-option-name{min-width:0;overflow-wrap:anywhere}
 .lmc-efforts{border-top:1px solid var(--dsw-alias-border-l1);margin-top:9px;padding-top:9px}.lmc-help{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6;margin:5px 0 10px;overflow-wrap:anywhere}
@@ -85,6 +108,8 @@ window.__ModuleLoader__.load({
 .lmc-button:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}.lmc-primary{color:var(--dsw-alias-brand-primary)}.lmc-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0}.lmc-table-wrap{overflow:auto}.lmc-table{width:100%;border-collapse:collapse;font-size:12px}.lmc-table th,.lmc-table td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--dsw-alias-border-l1);vertical-align:top}.lmc-table th{color:var(--dsw-alias-label-secondary);font-weight:500;white-space:nowrap}.lmc-table td:first-child{overflow-wrap:anywhere;min-width:170px}.lmc-table td:not(:first-child){white-space:nowrap}.lmc-issues{padding-left:20px;font-size:12px;overflow-wrap:anywhere}.lmc-status{display:inline-block;padding:3px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;font-size:12px}
 @media(max-width:720px){.lmc-page{padding:24px 16px}.lmc-rule{grid-template-columns:90px minmax(90px,1fr)}.lmc-rule>:last-child{justify-self:start}.lmc-menu{width:min(320px,calc(100vw - 40px))}}
 `;
+    /** The card opens above the trigger; inline so it beats the shared surface's own position. */
+    const MENU_STYLE = { position: 'absolute', right: 0, bottom: 'calc(100% + 8px)' };
     function errorText(error) {
       if (!error) return 'Unknown error';
       return `${error.code ? `${error.code}: ` : ''}${error.message || String(error)}`;
@@ -162,7 +187,7 @@ window.__ModuleLoader__.load({
       }
       function onKeyDown(event) {
         if (event.nativeEvent?.isComposing || !open) return;
-        if (event.key==='Escape') { event.preventDefault(); event.stopPropagation(); close(true); return; }
+        if (event.key==='Escape') { event.preventDefault(); event.stopPropagation(); if (event.target===searchRef.current && query) { setQuery(''); searchRef.current?.focus(); return; } close(true); return; }
         if (event.key==='Tab' && event.shiftKey && event.target===searchRef.current) { event.preventDefault(); close(true); return; }
         if (event.key!=='ArrowDown' && event.key!=='ArrowUp') return;
         const options=Array.from(rootRef.current?.querySelectorAll('[role="menuitemradio"]:not(:disabled)') || []);
@@ -181,20 +206,25 @@ window.__ModuleLoader__.load({
           title:[modelLabel,caption].filter(Boolean).join(' · '),'aria-label':[t('chooseModel'),modelLabel,caption].filter(Boolean).join(', '),
           onClick:() => { if (open) close(true); else { setQuery('');setError(null);setOpen(true);load().catch(failure => setError(errorText(failure))); } } },
           h('span',{className:'lmc-trigger-icon'},h(ModelIcon)),h('span',{className:'lmc-trigger-text'},modelLabel,caption?h('span',{className:'lmc-caption'},` · ${caption}`):null),h('span',{'aria-hidden':true},busy?'…':'⌄')),
-        open?h('div',{id:menuId,className:'lmc-menu',role:'menu','aria-label':`${t('model')} / ${t('effort')}`},
-          h('div',{className:'lmc-menu-title'},t('model')),
-          h('input',{type:'search',className:'lmc-input',ref:searchRef,value:query,placeholder:t('search'),'aria-label':t('search'),onChange:event=>setQuery(event.target.value)}),
-          config.loading || state.status==='loading' ? h('div',{className:'lmc-help',role:'status'},t('loading')):null,
-          !config.snapshot && config.error ? h('div',{className:'lmc-error',role:'alert'},t('settingsUnavailable'),h('div',null,config.error)):null,
-          error?h('div',{className:'lmc-error',role:'alert'},error):null,
-          state.error?h('div',{className:'lmc-error'},state.error):null,
-          error || state.error || config.error ? h('button',{type:'button',className:'lmc-button',disabled:busy||config.loading,onClick:refresh},t('retry')):null,
-          ...(state.failures||[]).map(failure=>h('div',{key:failure.id,className:'lmc-error'},`${failure.name||failure.id}: ${failure.message}`)),
-          ...visibleGroups.map(group=>h('div',{key:group.id},h('div',{className:'lmc-group-label'},group.name),
-            ...group.models.map(model=>{const checked=current?.provider===group.id&&current.model===model.id;return h('button',{key:model.id,type:'button',role:'menuitemradio','aria-checked':checked,className:'lmc-option',disabled:selectionDisabled,title:`${group.id}/${model.id}`,onClick:()=>chooseModel(group,model)},h('span',{className:'lmc-option-name'},model.name),h('span',{'aria-hidden':true},state.pending?.provider===group.id&&state.pending.model===model.id?'…':checked?'✓':''));}))),
-          visibleGroups.length===0?h('div',{className:'lmc-help',role:'status'},t(groups.length?'noMatch':'noModels')):null,
-          current && reasoning ? h('div',{className:'lmc-efforts'},h('div',{className:'lmc-menu-title'},t('effort')),
-            ...reasoning.efforts.map(level=>h('button',{key:level.id,type:'button',role:'menuitemradio','aria-checked':effectiveEffort===level.id,className:'lmc-option',disabled:selectionDisabled,onClick:()=>chooseEffort(level.id)},level.name,h('span',{'aria-hidden':true},effectiveEffort===level.id?'✓':'')))):null):null);
+        open?h(MenuSurface,{id:menuId,className:'lmc-menu',role:'menu','aria-label':`${t('model')} / ${t('effort')}`,style:MENU_STYLE},
+          h('div',{className:'lmc-menu-head'},
+            h('div',{className:'lmc-menu-title'},t('model')),
+            h('div',{className:'lmc-search'},
+              h('span',{className:'lmc-search-icon','aria-hidden':true},h(IconSearchOutlineRegular,{size:16})),
+              h('input',{type:'search',className:'lmc-search-input',ref:searchRef,value:query,placeholder:t('search'),'aria-label':t('search'),autoComplete:'off',spellCheck:false,onChange:event=>setQuery(event.target.value)}),
+              query?h('button',{type:'button',className:'lmc-search-clear','aria-label':t('clearSearch'),onClick:()=>{setQuery('');searchRef.current?.focus();}},h(IconCloseFillRegular,{size:12})):null)),
+          h('div',{className:'lmc-menu-body'},
+            config.loading || state.status==='loading' ? h('div',{className:'lmc-help',role:'status'},t('loading')):null,
+            !config.snapshot && config.error ? h('div',{className:'lmc-error',role:'alert'},t('settingsUnavailable'),h('div',null,config.error)):null,
+            error?h('div',{className:'lmc-error',role:'alert'},error):null,
+            state.error?h('div',{className:'lmc-error'},state.error):null,
+            error || state.error || config.error ? h('button',{type:'button',className:'lmc-button',disabled:busy||config.loading,onClick:refresh},t('retry')):null,
+            ...(state.failures||[]).map(failure=>h('div',{key:failure.id,className:'lmc-error'},`${failure.name||failure.id}: ${failure.message}`)),
+            ...visibleGroups.map(group=>h('div',{key:group.id},h('div',{className:'lmc-group-label'},group.name),
+              ...group.models.map(model=>{const checked=current?.provider===group.id&&current.model===model.id;return h('button',{key:model.id,type:'button',role:'menuitemradio','aria-checked':checked,className:'lmc-option',disabled:selectionDisabled,title:`${group.id}/${model.id}`,onClick:()=>chooseModel(group,model)},h('span',{className:'lmc-option-name'},model.name),h('span',{'aria-hidden':true},state.pending?.provider===group.id&&state.pending.model===model.id?'…':checked?'✓':''));}))),
+            visibleGroups.length===0?h('div',{className:'lmc-help',role:'status'},t(groups.length?'noMatch':'noModels')):null,
+            current && reasoning ? h('div',{className:'lmc-efforts'},h('div',{className:'lmc-menu-title'},t('effort')),
+              ...reasoning.efforts.map(level=>h('button',{key:level.id,type:'button',role:'menuitemradio','aria-checked':effectiveEffort===level.id,className:'lmc-option',disabled:selectionDisabled,onClick:()=>chooseEffort(level.id)},level.name,h('span',{'aria-hidden':true},effectiveEffort===level.id?'✓':'')))):null)):null);
     }
     function ProvenanceBadge({messageId,useProjection,control,t}) {
       const config=useControl(control);

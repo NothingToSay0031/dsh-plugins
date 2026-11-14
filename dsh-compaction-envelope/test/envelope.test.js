@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decide, installEnvelope, WRAPPED } from '../envelope.js';
+import { CLEANUP, decide, installEnvelope, WRAPPED } from '../envelope.js';
 
 const ROUTE = { provider: 'demo', model: 'gpt-6.1-sol', reasoningEffort: 'max' };
 const COMPACTION = {
@@ -102,13 +102,99 @@ test('installEnvelope restores the service on dispose', async () => {
   assert.equal(llm.stream, original);
 });
 
-test('installEnvelope refuses to stack two wrappers', () => {
+test('a reload takes over the wrapper that is already installed', async () => {
   const llm = fakeLlm();
+  const real = llm.stream;
   const first = installEnvelope(llm, resolveFrom(ROUTE));
   assert.equal(first.status, 'installed');
+  const firstWrapper = llm.stream;
   const second = installEnvelope(llm, resolveFrom(ROUTE));
-  assert.equal(second.status, 'already');
-  first.dispose();
+  assert.equal(second.status, 'installed');
+  assert.notEqual(llm.stream, firstWrapper, 'the new instance owns the call path');
+  // One layer only: the real stream is reached once and carries one effort.
+  for await (const _ of llm.stream(COMPACTION)) void _;
+  assert.equal(llm.seen.length, 1);
+  assert.equal(llm.seen[0].reasoningEffort, 'max');
+  second.dispose();
+  assert.equal(llm.stream, real, 'dispose restores the real stream, not the old wrapper');
+});
+
+test('a wrapper left by an earlier build is replaced, not kept', async () => {
+  // Builds before this one installed a wrapper with no disposer marker. Refusing to install then
+  // kept that older code in the call path for the rest of the process.
+  const llm = fakeLlm();
+  const real = llm.stream;
+  const legacy = function legacyStream(options) {
+    return real.call(llm, options);
+  };
+  Object.defineProperty(legacy, WRAPPED, { value: true, enumerable: false });
+  llm.stream = legacy;
+  const logs = [];
+  const installed = installEnvelope(llm, resolveFrom(ROUTE), {
+    logger: { info: (line) => logs.push(line), warn: (line) => logs.push(line) },
+  });
+  assert.equal(installed.status, 'installed');
+  assert.notEqual(llm.stream, legacy);
+  assert.equal(logs.some((line) => line.includes('earlier build')), true);
+  for await (const _ of llm.stream(COMPACTION)) void _;
+  assert.equal(llm.seen.length, 1, 'the inner wrapper forwards instead of injecting twice');
+  assert.equal(llm.seen[0].reasoningEffort, 'max');
+  installed.dispose();
+  assert.equal(llm.stream, legacy);
+});
+
+test('installEnvelope refuses to stack when the existing wrapper will not come down', () => {
+  const llm = fakeLlm();
+  const stubborn = function stubbornStream() {};
+  Object.defineProperty(stubborn, WRAPPED, { value: true, enumerable: false });
+  Object.defineProperty(stubborn, CLEANUP, { value: () => {}, enumerable: false });
+  llm.stream = stubborn;
+  assert.equal(installEnvelope(llm, resolveFrom(ROUTE)).status, 'already');
+});
+
+test('a service that exposes stream through a getter is still wrapped', async () => {
+  // `ctx.get('llm')` can hand back a service whose method is an accessor; a plain assignment is a
+  // silent no-op there, which used to read as "not writable" and left compaction calls unobserved.
+  const base = fakeLlm();
+  const real = base.stream;
+  const llm = { seen: base.seen };
+  Object.defineProperty(llm, 'stream', { get: () => real, configurable: true });
+  const installed = installEnvelope(llm, resolveFrom(ROUTE));
+  assert.equal(installed.status, 'installed');
+  for await (const _ of llm.stream(COMPACTION)) void _;
+  assert.equal(base.seen.length, 1);
+  assert.equal(base.seen[0].reasoningEffort, 'max');
+  installed.dispose();
+  assert.equal(llm.stream, real);
+});
+
+test('an unwrappable service is reported with the obstacle it hit', () => {
+  const real = fakeLlm().stream;
+  const llm = {};
+  Object.defineProperty(llm, 'stream', { get: () => real, configurable: false });
+  const installed = installEnvelope(llm, resolveFrom(ROUTE));
+  assert.equal(installed.status, 'not-writable');
+  assert.match(installed.detail, /getter only/);
+  assert.equal(llm.stream, real, 'the plain stream is left exactly as it was');
+});
+
+test('the finish reason is logged as its kind, not as an object', async () => {
+  // Real `finish` chunks carry `{kind}`; printing the object produced "finish=[object Object]".
+  const llm = fakeLlm();
+  const real = llm.stream;
+  llm.stream = async function* finishing(options) {
+    yield* real.call(llm, options);
+    yield { type: 'finish', reason: { kind: 'max-tokens' } };
+  };
+  const logs = [];
+  const installed = installEnvelope(llm, resolveFrom(ROUTE), {
+    logger: { info: (line) => logs.push(line), warn: (line) => logs.push(line) },
+  });
+  assert.equal(installed.status, 'installed');
+  for await (const _ of llm.stream(COMPACTION)) void _;
+  assert.equal(logs.some((line) => line.includes('finish=max-tokens')), true);
+  assert.equal(logs.every((line) => !line.includes('[object Object]')), true);
+  installed.dispose();
 });
 
 test('installEnvelope reports an unusable service instead of throwing', () => {
@@ -156,8 +242,10 @@ test('a summarized route mismatch is left alone and reported', async () => {
   const installed = installEnvelope(llm, resolveFrom(ROUTE), { logger: { info() {}, warn: (m) => warnings.push(m) } });
   for await (const _ of llm.stream({ ...COMPACTION, model: 'deepseek-flash' })) void _;
   assert.equal(llm.seen[0].reasoningEffort, undefined);
-  assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /routed to demo\/gpt-6.1-sol/);
+  // The stream tally reports on the same call, so count only the route warning itself.
+  const routeWarnings = warnings.filter((line) => line.includes('routed to'));
+  assert.equal(routeWarnings.length, 1);
+  assert.match(routeWarnings[0], /routed to demo\/gpt-6.1-sol/);
   installed.dispose();
 });
 

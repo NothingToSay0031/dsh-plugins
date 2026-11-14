@@ -2,15 +2,14 @@ window.__ModuleLoader__.load({
   id: '@local/dsh-session-collab',
   factory(require) {
     const React = require('react');
+    const { MenuItemButton } = require('@deepseek-ai/dsh-client-ui-primitives');
     const h = React.createElement;
     const { useState, useEffect, useRef, useCallback } = React;
     const NS = 'local.session-collab';
 
     const zh = {
       panel: '自主协作',
-      subtitle: '设置模型的难度顺序，查看 Agent 自主协作的通信记录。',
-      ranking: '模型排序',
-      logs: '通信日志',
+      subtitle: '按任务难度设置模型顺序，供 Agent 自主协作时选用。',
       refresh: '刷新',
       refreshing: '刷新中…',
       loading: '正在加载…',
@@ -46,42 +45,11 @@ window.__ModuleLoader__.load({
       reconciling: '正在读取最新版本并重试…',
       preserved: '未保存顺序已保留。重试会先读取最新版本，再保存你当前的完整顺序。',
       conflict: '排序已被其他页面修改，请重试保存当前顺序。',
-      logsHelp: '只读记录自动协作中的通信与会话创建；本页不发送消息、不回复，也不手动创建会话。',
-      logLimit: '显示快照中最近的最多 100 条记录。',
-      moreLogs: '还有较早记录；此版本暂不提供历史分页。',
-      noLogs: '暂无通信记录。',
-      sendKind: '会话通信',
-      createKind: '创建协作者',
-      otherKind: '协作记录',
-      from: '来自',
-      to: '发送给',
-      unnamedSession: '未命名会话',
-      deletedSession: '已删除会话',
-      admitted: '已进入处理步骤',
-      notAdmitted: '尚未确认进入处理步骤',
-      acceptanceHelp: '请求被接受不等于任务完成；消息可能仍在等待处理。',
-      stateAccepted: '已接受',
-      statePrepared: '已记录意图',
-      stateUnknown: '结果未知／待对账',
-      stateCreated: '已创建',
-      stateRejected: '已拒绝',
-      stateFailed: '失败',
-      statePending: '等待处理',
-      stateQueued: '已排队',
-      stateDelivered: '已投递',
-      stateOther: '状态未确认',
-      selectedModel: '选用模型',
-      messageBody: '展开完整内容',
-      emptyBody: '此记录没有文本内容。',
-      unknownTime: '时间未知',
-      dateLocale: 'zh-CN',
     };
 
     const en = {
       panel: 'Autonomous Collaboration',
-      subtitle: 'Rank models by task difficulty and review autonomous collaboration activity.',
-      ranking: 'Model ranking',
-      logs: 'Communication log',
+      subtitle: 'Rank models by task difficulty for autonomous collaboration.',
       refresh: 'Refresh',
       refreshing: 'Refreshing…',
       loading: 'Loading…',
@@ -117,35 +85,6 @@ window.__ModuleLoader__.load({
       reconciling: 'Reading the latest version and retrying…',
       preserved: 'Your unsaved order is preserved. Retry reads the latest revision, then saves your complete current order.',
       conflict: 'Another page changed the ranking. Retry to save your current order.',
-      logsHelp: 'Read-only records of autonomous messages and Session creation. This page cannot send, reply or manually create Sessions.',
-      logLimit: 'Showing up to the latest 100 records from the snapshot.',
-      moreLogs: 'Older records exist; historical pagination is not available in this version.',
-      noLogs: 'No communication records yet.',
-      sendKind: 'Session message',
-      createKind: 'Collaborator creation',
-      otherKind: 'Collaboration record',
-      from: 'From',
-      to: 'To',
-      unnamedSession: 'Unnamed Session',
-      deletedSession: 'Deleted Session',
-      admitted: 'Admitted to a processing step',
-      notAdmitted: 'Admission to a processing step is not confirmed',
-      acceptanceHelp: 'Acceptance is not task completion; a message may still be waiting for processing.',
-      stateAccepted: 'Accepted',
-      statePrepared: 'Intent recorded',
-      stateUnknown: 'Unknown / reconciliation needed',
-      stateCreated: 'Created',
-      stateRejected: 'Rejected',
-      stateFailed: 'Failed',
-      statePending: 'Pending',
-      stateQueued: 'Queued',
-      stateDelivered: 'Delivered',
-      stateOther: 'Status unconfirmed',
-      selectedModel: 'Selected model',
-      messageBody: 'Expand full content',
-      emptyBody: 'This record has no text content.',
-      unknownTime: 'Unknown time',
-      dateLocale: 'en-US',
     };
 
     const css = `
@@ -159,18 +98,16 @@ window.__ModuleLoader__.load({
       .sc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 22px; }
       .sc-header h1 { margin: 0 0 6px; font-size: 23px; line-height: 1.4; font-weight: 650; }
       .sc-muted { color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
-      .sc-tabs { display: flex; gap: 8px; flex-wrap: wrap; border-bottom: 1px solid var(--dsw-alias-border-l1); padding-bottom: 12px; margin-bottom: 20px; }
       .sc-button {
         border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px; padding: 8px 12px;
         background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
         font: inherit; cursor: pointer; line-height: 1.4;
       }
       .sc-button:hover:not(:disabled) { border-color: var(--dsw-alias-brand-primary); }
-      .sc-button:focus-visible, .sc-model-row:focus-visible, .sc-log details > summary:focus-visible {
+      .sc-button:focus-visible, .sc-model-row:focus-visible {
         outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 3px;
       }
       .sc-button:disabled { opacity: .45; cursor: not-allowed; }
-      .sc-button[aria-current=page] { border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-brand-primary); }
       .sc-small-button { padding: 6px 9px; font-size: 12px; }
       .sc-savebar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; min-height: 32px; }
       .sc-save-status { font-size: 12px; line-height: 1.7; }
@@ -192,7 +129,7 @@ window.__ModuleLoader__.load({
       .sc-grip { color: var(--dsw-alias-label-secondary); letter-spacing: -2px; flex-shrink: 0; user-select: none; }
       .sc-model-details { min-width: 0; flex: 1; }
       .sc-model-name { font-size: 14px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
-      .sc-badges, .sc-controls, .sc-log-meta { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+      .sc-badges, .sc-controls { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
       .sc-badges { margin-top: 6px; }
       .sc-badge { display: inline-block; border: 1px solid var(--dsw-alias-border-l1); border-radius: 5px; padding: 2px 7px; font-size: 11px; line-height: 1.6; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }
       .sc-badge-warning { border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-label-primary); }
@@ -200,13 +137,6 @@ window.__ModuleLoader__.load({
       .sc-drop-zone { margin-top: 10px; border: 1px dashed var(--dsw-alias-border-l1); border-radius: 8px; padding: 12px; text-align: center; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 1.7; }
       .sc-drop-zone[data-drop-target=true] { border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-brand-primary); }
       .sc-empty { padding: 22px 12px; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 1.8; }
-      .sc-log-list { padding: 0; margin: 0; list-style: none; }
-      .sc-log-meta { justify-content: space-between; margin-bottom: 10px; }
-      .sc-log-names { display: flex; gap: 10px 20px; flex-wrap: wrap; line-height: 1.7; margin-bottom: 10px; overflow-wrap: anywhere; }
-      .sc-log-name-label { color: var(--dsw-alias-label-secondary); margin-right: 6px; font-size: 12px; }
-      .sc-log-body { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; line-height: 1.75; margin: 12px 0 0; }
-      .sc-log details > summary { cursor: pointer; color: var(--dsw-alias-label-secondary); font-size: 12px; margin-top: 12px; }
-      .sc-log-selection { margin: 8px 0; }
       @media (max-width: 760px) {
         .sc-page { padding: 20px 16px; }
         .sc-header { gap: 12px; }
@@ -346,60 +276,9 @@ window.__ModuleLoader__.load({
       }, t(active ? 'dropAtEnd' : 'dropToDisable')));
     }
 
-    function sessionLabel(log, side, sessions, t) {
-      const identity = log[side] || log[`${side}SessionId`];
-      const name = typeof log[`${side}Name`] === 'string' ? log[`${side}Name`].trim() : '';
-      if (name && name !== identity) return name;
-      const deleted = log[`${side}Deleted`] === true
-        || (identity && !sessions.some(session => session.sessionId === identity));
-      return t(deleted ? 'deletedSession' : 'unnamedSession');
-    }
-
-    function LogList({ snapshot, t }) {
-      const stateKeys = {
-        accepted: 'stateAccepted', prepared: 'statePrepared', unknown: 'stateUnknown',
-        created: 'stateCreated', rejected: 'stateRejected', failed: 'stateFailed',
-        pending: 'statePending', queued: 'stateQueued', delivered: 'stateDelivered',
-      };
-      const logs = snapshot.logs.slice(0, 100);
-      return h('section', { 'aria-label': t('logs') },
-        h('div', { className: 'sc-instructions sc-muted' },
-          h('div', null, t('logsHelp')), h('div', null, t('acceptanceHelp')),
-          h('div', null, t('logLimit')),
-          snapshot.logsHasMore && h('div', null, t('moreLogs'))),
-        !logs.length ? h('div', { className: 'sc-empty' }, t('noLogs'))
-          : h('ol', { className: 'sc-log-list' }, ...logs.map((log, index) => {
-            const date = new Date(log.createdAt);
-            const validDate = Number.isFinite(date.getTime());
-            const time = validDate ? date.toLocaleString(t('dateLocale')) : t('unknownTime');
-            const selection = log.selection;
-            const selected = selection && isRoute(selection) ? modelInfo(selection, snapshot.models) : null;
-            const body = typeof log.body === 'string' ? log.body : '';
-            const bodyNode = body ? h('div', { className: 'sc-log-body' }, body)
-              : h('div', { className: 'sc-muted' }, t('emptyBody'));
-            return h('li', { key: log.id || index }, h('article', { className: 'sc-card sc-log' },
-              h('div', { className: 'sc-log-meta' },
-                h('div', { className: 'sc-badges' },
-                  h('span', { className: 'sc-badge' }, t(log.kind === 'send' ? 'sendKind'
-                    : log.kind === 'create' ? 'createKind' : 'otherKind')),
-                  h('span', { className: 'sc-badge' }, t(stateKeys[log.state] || 'stateOther'))),
-                h('time', { className: 'sc-muted', dateTime: validDate ? date.toISOString() : undefined }, time)),
-              h('div', { className: 'sc-log-names' },
-                h('div', null, h('span', { className: 'sc-log-name-label' }, t('from')),
-                  sessionLabel(log, 'from', snapshot.sessions, t)),
-                h('div', null, h('span', { className: 'sc-log-name-label' }, t('to')),
-                  sessionLabel(log, 'to', snapshot.sessions, t))),
-              log.kind === 'send' && h('div', { className: 'sc-muted' }, t(log.admitted === true ? 'admitted' : 'notAdmitted')),
-              selected && h('div', { className: 'sc-muted sc-log-selection' },
-                `${t('selectedModel')}: ${selected.providerName || selected.provider} / ${selected.name || selected.model}${selection.reasoningEffort ? ` · ${selection.reasoningEffort}` : ''}`),
-              body.length > 1200 ? h('details', null, h('summary', null, t('messageBody')), bodyNode) : bodyNode));
-          })));
-    }
-
     function Page({ api, t }) {
       const [snapshot, setSnapshot] = useState(null);
       const [draft, setDraft] = useState(null);
-      const [tab, setTab] = useState('ranking');
       const [loading, setLoading] = useState(false);
       const [loadError, setLoadError] = useState('');
       const [saveState, setSaveState] = useState('idle');
@@ -428,8 +307,7 @@ window.__ModuleLoader__.load({
 
       const decodeSnapshot = value => {
         const ranking = parseRanking(value && value.ranking);
-        if (!value || value.version !== 2 || !ranking || !Array.isArray(value.models)
-          || !Array.isArray(value.sessions) || !Array.isArray(value.logs)) {
+        if (!value || value.version !== 2 || !ranking || !Array.isArray(value.models)) {
           throw new Error(tRef.current('invalidSnapshot'));
         }
         return { ...value, ranking, models: value.models.filter(isRoute) };
@@ -522,7 +400,7 @@ window.__ModuleLoader__.load({
             draftRef.current = next.ranking;
             setDraft(next.ranking);
           }
-          // Normal refreshes update metadata and logs, never an in-flight or unsaved ordering.
+          // Normal refreshes update model metadata, never an in-flight or unsaved ordering.
         } catch (error) {
           if (!alive.current || lifetime.current !== owner || sequence !== loadSequence.current) return;
           setLoadError(errorMessage(error));
@@ -615,12 +493,6 @@ window.__ModuleLoader__.load({
               type: 'button', className: 'sc-button', disabled: loading,
               onClick: () => { void load(); },
             }, t(loading ? 'refreshing' : 'refresh'))),
-          h('nav', { className: 'sc-tabs', 'aria-label': t('panel') },
-            ...['ranking', 'logs'].map(id => h('button', {
-              key: id, type: 'button', className: 'sc-button',
-              'aria-current': tab === id ? 'page' : undefined,
-              onClick: () => { endDrag(); setTab(id); },
-            }, t(id)))),
           loadError && h('div', { className: 'sc-alert', role: 'alert' },
             h('div', { className: 'sc-alert-title' }, t('loadFailed')),
             h('div', null, loadError)),
@@ -639,8 +511,8 @@ window.__ModuleLoader__.load({
                   className: 'sc-save-status', role: 'status', 'aria-live': 'polite', 'aria-atomic': true,
                   'data-state': saveState,
                 }, t(statusKey)),
-                tab === 'ranking' && h('div', { className: 'sc-muted' }, t('effortHelp'))),
-              tab === 'ranking' && visible && h(React.Fragment, null,
+                h('div', { className: 'sc-muted' }, t('effortHelp'))),
+              visible && h(React.Fragment, null,
                 h('p', { id: 'sc-drag-help', className: 'sc-instructions sc-muted' }, t('dragHelp')),
                 !visible.active.length && !visible.inactive.length
                   && h('div', { className: 'sc-empty' }, t('noModels')),
@@ -648,12 +520,11 @@ window.__ModuleLoader__.load({
                   key: zone, zone, routes: visible[zone], models: snapshot.models, dragging, dropTarget,
                   onStart: startDrag, onEnd: endDrag, onOver: over, onDrop: drop, onMove: move, t,
                 })),
-                unavailable && h('p', { className: 'sc-muted' }, t('unavailableHelp'))),
-              tab === 'logs' && h(LogList, { snapshot, t }))));
+                unavailable && h('p', { className: 'sc-muted' }, t('unavailableHelp'))))));
     }
 
     return {
-      inject: ['slots', 'locale', 'connection'],
+      inject: ['slots', 'locale', 'connection', 'layout'],
       apply(ctx) {
         ctx.effect(() => ctx.locale.register(NS, { zh, en }));
         const t = ctx.locale.bind(NS);
@@ -674,9 +545,16 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('main', () => ctx.slots.register({
           name: 'main', key: 'session-collab', locale: NS, inject: () => ({ api }),
         }, Page));
-        ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-          name: 'sidebar.panellist', id: 'session-collab', order: 15, label: () => t('panel'),
-        }, Icon));
+        ctx.slots.inject('sidebar.panellist.actions', () => ctx.slots.register({
+          name: 'sidebar.panellist.actions', id: 'session-collab', order: -20, locale: NS,
+        }, ({ onDismiss }) => h(MenuItemButton, {
+          icon: h(Icon, { size: 16 }),
+          current: ctx.layout.panelInfo.getSnapshot().activePanelId === 'session-collab',
+          onSelect: () => {
+            onDismiss();
+            ctx.layout.selectPanel('session-collab');
+          },
+        }, t('panel'))));
       },
     };
   },

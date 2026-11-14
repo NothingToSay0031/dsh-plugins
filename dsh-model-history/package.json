@@ -1,0 +1,16 @@
+{
+  "name": "@local/dsh-model-history",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Per-session history of the model and reasoning effort actually used by the requests of a DeepSeek Harness conversation.",
+  "exports": { ".": "./index.js", "./client": "./client.js", "./locale/*.json": "./locale/*.json", "./icon": "./icon.svg" },
+  "files": ["index.js", "contracts.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md"],
+  "dependencies": { "zod": "^4.1.0" },
+  "scripts": { "test": "node --test test/*.test.js", "check": "node --check index.js && node --check contracts.js && node --check client.js" },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": { "platform": "web", "immediately": true, "inject": ["@deepseek-ai/dsh-client-ui-conversation", "@deepseek-ai/dsh-client-ui-primitives", "@deepseek-ai/dsh-client-locale"] }
+  }
+}

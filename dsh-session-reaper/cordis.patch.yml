@@ -1,0 +1,36 @@
+- insert:
+    - id: local-session-reaper
+      name: '@local/dsh-session-reaper'
+      # A row override replaces the whole config object, so restate every field you care about when
+      # overriding this row in a profile.
+      config:
+        enabled: true
+        dryRun: false
+        # lazy: keep the payload on disk and re-read it on first access. `blank` is the older
+        # destructive variant and only helps when the payload is resident to begin with.
+        mode: lazy
+        keepLastEvents: 2000    # never touch the most recent N events
+        hydrationCacheSize: 256 # hydrated payloads kept at once (floor 8)
+        evictObservationCache: true # drop unpinned cold-observation entries every tick
+        pressureMB: 3200        # above this pre-GC heap, drop caches and collect
+        gcEvery: 4              # force a full GC every N ticks (~300 ms on a 1.4 GB heap)
+        types: ['tool/result', 'assistant/message']
+        # The index is the only part that could make a session feel slow to open: it is scanned in
+        # `indexBudgetMs` slices and written to `indexCacheDir`, so the next start adopts it (11 ms
+        # for a 221 MB log) instead of rescanning.
+        indexBudgetMs: 250      # loop time one tick may spend scanning a cold session log
+        indexBuildsPerTick: 1   # how many cold sessions may start scanning in one tick
+        indexCacheSize: 16      # how many frame tables stay warm
+        indexCacheMB: 64        # conservative byte limit; old views never pin an evicted table
+      #   intervalMs: 30000
+      #   triggerMB: 64         # only act when heapUsed is above this
+      #   minStringLen: 256     # only for mode: blank
+      #   logFile: ''           # '' -> $DSH_HOME/logs/session-reaper.jsonl
+      #   indexCacheDir: ''     # '' -> $DSH_HOME/cache/session-reaper-index
+      #   probe: false          # one-shot string histogram of the resident log
+      #   probeSession: false   # weigh every field of each loaded Session
+      #   probeAgents: false    # weigh the agents service and each agent
+      #   probeFold: false      # report what the surface fold still holds
+      #   probeGlobal: false    # rank structures reachable from the Cordis context tree
+      #   measureDerived: false # weigh derivedNodes/contextFold/toolHistoryProjection
+      #   snapshotPath: ''      # write one heap snapshot (needs snapshotMinMB)

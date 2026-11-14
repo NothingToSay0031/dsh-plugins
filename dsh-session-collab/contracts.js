@@ -43,24 +43,56 @@ export function highestReasoningEffort(info) {
   if (efforts.length === 1) return efforts[0].id;
   throw new Error('Cannot determine highest reasoning effort for this provider-specific scale');
 }
+/**
+ * Insertion order of one `receipts` record, so eviction never has to read the keys back.
+ *
+ * Same trap as the reply provenance fold: copying the whole record per collaboration message and
+ * evicting with `delete` costs a table rebuild each time. On a 286,789-event Session the copy alone
+ * was 1.9 s of CPU per cold read (V8 sampling profiler), so the record is folded in place and the
+ * projection state carries a fresh wrapper object instead.
+ *
+ * The order list only grows for keys the record does not already have: one collaboration message is
+ * folded twice (accepted on the inbox splice, admitted on the user message), and counting pushes
+ * instead of new keys would evict live entries.
+ */
+const RECEIPT_ORDER = new WeakMap();
+
+/** Newest delivery receipts kept in the projection, plus the tolerated excess before compaction. */
+export const MAX_RECEIPTS = 1000;
+export const RECEIPTS_SLACK = 100;
+
 export function receiptFold(state, event) {
   if (event.type !== 'agent/inbox/spliced' && event.type !== 'user/message') return state;
   const messages = event.type === 'user/message' ? [event.data] : (event.data.inserted ?? []);
-  let next = state;
+  const receipts = state.receipts;
+  let ids = null;
+  let changed = false;
   for (const message of messages) {
-    if (!message.id?.startsWith('collab-message-')) continue;
-    const old = next[message.id];
+    // `__proto__` is not an own key under plain assignment, so skip it rather than let one message
+    // id write a prototype. No runtime collaboration id is that string.
+    if (!message.id?.startsWith('collab-message-') || message.id === '__proto__') continue;
+    const old = receipts[message.id];
     const entry = { acceptedSeq: old?.acceptedSeq ?? event.seq, admittedSeq: event.type === 'user/message' ? event.seq : (old?.admittedSeq ?? null) };
     if (old?.acceptedSeq === entry.acceptedSeq && old?.admittedSeq === entry.admittedSeq) continue;
-    if (next === state) next = { ...state };
-    next[message.id] = entry;
+    if (ids === null) ids = RECEIPT_ORDER.get(receipts) ?? Object.keys(receipts);
+    if (!Object.hasOwn(receipts, message.id)) ids.push(message.id);
+    receipts[message.id] = entry;
+    changed = true;
   }
-  return next;
+  if (!changed) return state;
+  // One entry per delivered collaboration message would otherwise keep every message of a long
+  // Session alive in the Plugin Host. Compact in batches so the record stays in shape mode.
+  if (ids.length <= MAX_RECEIPTS + RECEIPTS_SLACK) return { receipts };
+  const kept = ids.slice(ids.length - MAX_RECEIPTS);
+  const compacted = {};
+  for (const id of kept) compacted[id] = receipts[id];
+  RECEIPT_ORDER.set(compacted, kept);
+  return { receipts: compacted };
 }
 export const receiptProjection = {
-  key: PROJECTION, stateVersion: 1,
-  stateSchema: z.record(z.string(), z.object({ acceptedSeq: z.number(), admittedSeq: z.number().nullable() })),
-  init: () => ({}), apply: receiptFold,
+  key: PROJECTION, stateVersion: 2,
+  stateSchema: z.object({ receipts: z.record(z.string(), z.object({ acceptedSeq: z.number(), admittedSeq: z.number().nullable() })) }),
+  init: () => ({ receipts: {} }), apply: receiptFold,
 };
 const input = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const requestId = { type: 'string', description: 'Stable unique key for this operation; retry with the same key and arguments after an uncertain result.' };

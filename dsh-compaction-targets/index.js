@@ -1,4 +1,6 @@
+import path from 'node:path';
 import { applyTargets, getSnapshot, TargetError } from './compaction-patch.js';
+import { readUpstreamPresets } from './preset-baseline.js';
 
 export const name = 'compaction-targets';
 export const inject = ['connection', 'agentPresets'];
@@ -48,6 +50,27 @@ export function apply(ctx) {
     }
   }
 
+  // The home layer. It is applied after the profile layer and wins over it,
+  // so the generated preset rows live there and the profile file keeps only
+  // what a person wrote.
+  function homePatchPath() {
+    try {
+      const profile = ctx.get('profileContext');
+      if (profile && typeof profile.home === 'string') return path.join(profile.home, 'cordis.patch.yml');
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function patchOptions(presets) {
+    return {
+      patchPath: profilePatchPath(),
+      homePatchPath: homePatchPath(),
+      presets,
+    };
+  }
+
   async function presetCatalog() {
     const service = ctx.get('agentPresets');
     if (!service || typeof service.list !== 'function') return undefined;
@@ -58,17 +81,15 @@ export function apply(ctx) {
     } catch {
       defaultId = undefined;
     }
+    // The bundle declaration behind every profile row, read through the
+    // config editor's inherited layer. The effective declaration is not read
+    // here: it already carries the profile's own row, so using it as the
+    // baseline of a rewrite would freeze that copy and an upstream rename
+    // would never reach the profile.
+    const upstream = new Map(readUpstreamPresets(ctx).map(preset => [preset.id, preset.config]));
     const presets = [];
     for (const row of rows || []) {
       if (!row || typeof row.id !== 'string') continue;
-      let document;
-      try {
-        document = typeof service.readDocument === 'function'
-          ? await service.readDocument(row.id)
-          : undefined;
-      } catch {
-        document = undefined;
-      }
       presets.push({
         id: row.id,
         ...(row.name ? { name: row.name } : {}),
@@ -76,7 +97,7 @@ export function apply(ctx) {
         ...(row.order === undefined ? {} : { order: row.order }),
         isDefault: row.id === defaultId,
         ...(row.broken ? { broken: row.broken } : {}),
-        ...(document && typeof document.content === 'string' ? { content: document.content } : {}),
+        ...(upstream.has(row.id) ? { upstream: upstream.get(row.id) } : {}),
       });
     }
     return presets;
@@ -90,7 +111,7 @@ export function apply(ctx) {
       try {
         const presets = await presetCatalog();
         if (request.method === 'GET') {
-          return jsonResponse(await getSnapshot({ patchPath: profilePatchPath(), presets }));
+          return jsonResponse(await getSnapshot(patchOptions(presets)));
         }
         if (request.method === 'POST') {
           let body;
@@ -107,7 +128,7 @@ export function apply(ctx) {
               },
             }, 400);
           }
-          return jsonResponse(await applyTargets(body, { patchPath: profilePatchPath(), presets }));
+          return jsonResponse(await applyTargets(body, patchOptions(presets)));
         }
         return new Response('method not allowed', { status: 405 });
       } catch (error) {

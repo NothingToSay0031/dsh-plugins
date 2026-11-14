@@ -45,7 +45,7 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => {
     const llm = ctx.get('llm');
     const installed = installEnvelope(llm, routedEnvelope, {
-      config: { requireSameRoute: settings.requireSameRoute !== false },
+      config: { requireSameRoute: settings.requireSameRoute !== false, diagnose: settings.diagnose !== false },
       logger: ctx.logger,
     });
     if (installed.status !== 'installed') {

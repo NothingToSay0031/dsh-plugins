@@ -1,9 +1,10 @@
 {
   "name": "@local/dsh-compaction-targets",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "Edit per-model compaction points in the DSH desktop profile.",
+  "license": "MIT",
+  "description": "Edit per-model compaction points and the subagent default route in the DSH desktop profile; the generated preset rows live in the home layer.",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -13,6 +14,7 @@
   "files": [
     "index.js",
     "compaction-patch.js",
+    "preset-baseline.js",
     "client.js",
     "cordis.patch.yml",
     "vendor/js-yaml.cjs",
@@ -29,7 +31,8 @@
       "platform": "web",
       "immediately": true,
       "inject": [
-        "@deepseek-ai/dsh-client-ui-plugin-manager"
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar"
       ]
     }
   }

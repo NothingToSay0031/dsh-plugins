@@ -1,0 +1,7 @@
+- insert:
+    - id: local-dsh-material
+      name: '@local/dsh-material'
+      # Durable default for new browser sessions: soft | vivid | flat.
+      # A live switch from the sidebar `更多` → Material panel writes this field back through the Host settings service.
+      config:
+        preset: soft
