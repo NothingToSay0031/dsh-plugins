@@ -50,15 +50,25 @@ function seqOf(line) {
 const PAYLOAD_KEYS = new Set(['data', 'sourceEventSeqs', 'surfaceOp']);
 
 const CACHE_MAGIC = 'DSRI';
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 // v2 adds an 8-byte fingerprint of the first frame's raw bytes. A rewritten log of exactly the same
 // length passed every check v1 had (`covered <= size`), so a stale table was adopted and answered
 // reads with whatever now sat at those offsets.
+// v3 appends the `session/end-seed` marker records after the frame records, so an open-time lazy
+// decode can derive the inherited cut without re-reading the log. A v2 table is rejected and
+// rescanned once; the frame layout itself is unchanged.
 const CACHE_HEADER = 36;
 const CACHE_RECORD = 24;
 const CACHE_DIGEST_AT = 28;
+// Spare header word since v3: how many marker records follow the frame records.
+const CACHE_MARKER_COUNT_AT = 32;
+// seq (u32), inherited flag (u32), owning frame index (u32).
+const CACHE_MARKER_RECORD = 12;
 const CACHE_DIGEST_LEN = 256;
 const NO_SEQ = 0xffffffff;
+// The encoder writes `type` first, so a marker line is recognizable without parsing it. Only the
+// matching lines (a handful per log, all near the head) pay a JSON.parse.
+const END_SEED_HEAD = /^\{"type":"session\/end-seed","seq":(\d+),/u;
 // Returned by `decodeAt` when the bytes at an offset are not the start of a frame at all, as opposed
 // to a frame that is only partly written. Distinct from `null`, which means "wait for more bytes".
 const GARBAGE = Symbol('not a frame start');
@@ -93,6 +103,17 @@ export function createLogIndex(file, options = {}) {
   let scannedTo = 0;
   let complete = false;
   let savedFrames = 0;
+  // Whether every event seq is dense (no gap, no duplicate) within and across frames. The open-time
+  // lazy decode refuses a non-dense table so the original decoder owns the corruption diagnostic;
+  // `saveCache` never persists one, so an adopted table is dense by construction.
+  let dense = true;
+  // The next seq a dense log must carry. A duplicate-and-missing pair keeps a frame's count equal to
+  // its span, so only a per-event expectation catches it.
+  let expectedSeq = 0;
+  // `session/end-seed` markers found during the scan: { seq, inherited, frame }. The open-time lazy
+  // decode derives the inherited cut from the last `inherited` one; the frame index lets a provisional
+  // rollback drop exactly the markers of the undone frames.
+  const markers = [];
   // Set when the log turns out to be shorter than the bytes this table covers: the file was
   // rewritten or cleared, so every recorded offset points somewhere else. Reads must fail loudly
   // rather than decode whatever now sits at that offset.
@@ -200,13 +221,27 @@ export function createLogIndex(file, options = {}) {
     let first = -1;
     let last = -1;
     let count = 0;
+    const frameMarkers = [];
     for (const line of text.split('\n')) {
       if (line.length === 0) continue;
       const seq = seqOf(line);
       if (seq < 0) continue;
+      if (seq !== expectedSeq) dense = false;
+      expectedSeq = seq + 1;
       if (first < 0) first = seq;
       last = seq;
       count += 1;
+      const marker = END_SEED_HEAD.exec(line);
+      if (marker !== null) {
+        // A malformed marker line is left to the Host's decoder to refuse; the table only records
+        // what parses, and a missing marker makes the lazy open fall back to the full decode.
+        try {
+          const parsed = JSON.parse(line);
+          frameMarkers.push({ seq, inherited: parsed?.data?.inherited === true, frame: ends.length });
+        } catch {
+          /* unparseable marker: the full decode owns the refusal */
+        }
+      }
     }
     // An event-less frame is only legitimate as the first one: that is where the session header
     // lives. Recording one mid-file would break the monotonic `lastSeqs` the binary search needs.
@@ -217,6 +252,7 @@ export function createLogIndex(file, options = {}) {
     lastSeqs.push(last);
     events += count;
     if (last > lastSeq) lastSeq = last;
+    for (const marker of frameMarkers) markers.push(marker);
   }
 
   // Where the scan stopped because the frame there is not complete yet, and how big the file was:
@@ -274,8 +310,13 @@ export function createLogIndex(file, options = {}) {
         lastSeqs.length = provisional.count;
         events = provisional.events;
         lastSeq = provisional.lastSeq;
+        expectedSeq = lastSeq + 1;
         scannedTo = provisional.start;
         eofBoundary = -1;
+        // Markers of the undone frames go with them; a rescan re-records them.
+        for (let i = markers.length - 1; i >= 0; i -= 1) {
+          if (markers[i].frame >= provisional.count) markers.splice(i, 1);
+        }
         provisional = null;
       } else {
         resetState();
@@ -452,13 +493,23 @@ export function createLogIndex(file, options = {}) {
     view.setUint32(at + 20, lastSeqs[index] < 0 ? NO_SEQ : lastSeqs[index], true);
   }
 
-  function writeHeader(view, covered, count, digest, storedEvents, storedLastSeq) {
+  function writeHeader(view, covered, count, digest, storedEvents, storedLastSeq, markerCount) {
     view.setUint32(4, CACHE_VERSION, true);
     view.setFloat64(8, covered, true);
     view.setUint32(16, storedEvents, true);
     view.setUint32(20, storedLastSeq < 0 ? NO_SEQ : storedLastSeq, true);
     view.setUint32(24, count, true);
     view.setUint32(CACHE_DIGEST_AT, digest, true);
+    view.setUint32(CACHE_MARKER_COUNT_AT, markerCount, true);
+  }
+
+  function writeMarkers(view, at, list) {
+    for (let i = 0; i < list.length; i += 1) {
+      const off = at + i * CACHE_MARKER_RECORD;
+      view.setUint32(off, list[i].seq, true);
+      view.setUint32(off + 4, list[i].inherited ? 1 : 0, true);
+      view.setUint32(off + 8, list[i].frame, true);
+    }
   }
 
   /** Fingerprint of the bytes at the head of the log, recomputed on demand (one 256-byte read). */
@@ -479,13 +530,17 @@ export function createLogIndex(file, options = {}) {
     ends.length = 0;
     firstSeqs.length = 0;
     lastSeqs.length = 0;
+    markers.length = 0;
     events = 0;
     lastSeq = -1;
     scannedTo = 0;
     savedFrames = 0;
+    savedMarkerCount = 0;
     lastSavedOffset = -1;
     stale = false;
     complete = false;
+    dense = true;
+    expectedSeq = 0;
     blockedAt = -1;
     blockedSize = -1;
     eofBoundary = -1;
@@ -510,7 +565,8 @@ export function createLogIndex(file, options = {}) {
       if (view.getUint32(4, true) !== CACHE_VERSION) return false;
       const covered = view.getFloat64(8, true);
       const count = view.getUint32(24, true);
-      if (count === 0 || buffer.length < CACHE_HEADER + count * CACHE_RECORD) return false;
+      const markerCount = view.getUint32(CACHE_MARKER_COUNT_AT, true);
+      if (count === 0 || buffer.length < CACHE_HEADER + count * CACHE_RECORD + markerCount * CACHE_MARKER_RECORD) return false;
       if (covered > fs.statSync(file).size) return false; // the log was rewritten: rescan
       for (let i = 0; i < count; i += 1) {
         const at = CACHE_HEADER + i * CACHE_RECORD;
@@ -520,6 +576,18 @@ export function createLogIndex(file, options = {}) {
         const last = view.getUint32(at + 20, true);
         firstSeqs.push(first === NO_SEQ ? -1 : first);
         lastSeqs.push(last === NO_SEQ ? -1 : last);
+      }
+      const markersAt = CACHE_HEADER + count * CACHE_RECORD;
+      for (let i = 0; i < markerCount; i += 1) {
+        const at = markersAt + i * CACHE_MARKER_RECORD;
+        const seq = view.getUint32(at, true);
+        const inherited = view.getUint32(at + 4, true) === 1;
+        const frame = view.getUint32(at + 8, true);
+        if (seq === NO_SEQ || frame >= count) {
+          resetState();
+          return false;
+        }
+        markers.push({ seq, inherited, frame });
       }
       // Frames are contiguous by construction. A table that is not cannot be resumed from: the header
       // and the records can be written in different runs, so check the shape before trusting it.
@@ -539,8 +607,10 @@ export function createLogIndex(file, options = {}) {
       events = view.getUint32(16, true);
       const storedLast = view.getUint32(20, true);
       lastSeq = storedLast === NO_SEQ ? -1 : storedLast;
+      expectedSeq = lastSeq + 1;
       scannedTo = covered;
       savedFrames = count;
+      savedMarkerCount = markerCount;
       lastSavedOffset = covered;
       cacheUsable = true;
       adoptedFromCache = true;
@@ -553,6 +623,8 @@ export function createLogIndex(file, options = {}) {
 
   function saveCache() {
     if (!cacheFile || ends.length === 0) return false;
+    // A non-dense table describes a corrupt log; never persist it, so adoption can trust density.
+    if (!dense) return false;
     // The record that ends at the end of the file was accepted on structure alone (see `decodeAt`),
     // so it is never written: a later start would adopt an offset nothing can re-verify. Holding it
     // back costs one frame's re-read next time, which is cheaper than a table that may be wrong.
@@ -560,7 +632,8 @@ export function createLogIndex(file, options = {}) {
     const count = holdBack === null ? ends.length : holdBack.count;
     const covered = holdBack === null ? scannedTo : holdBack.start;
     if (count === 0) return false;
-    if (count === savedFrames && covered === lastSavedOffset) return false;
+    const storedMarkers = markers.filter(marker => marker.frame < count);
+    if (count === savedFrames && covered === lastSavedOffset && storedMarkers.length === savedMarkerCount) return false;
     const digest = cacheDigest();
     if (digest === 0) return false;
     const storedEvents = holdBack === null ? events : holdBack.events;
@@ -569,35 +642,37 @@ export function createLogIndex(file, options = {}) {
       fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
       const appendFrom = cacheUsable && savedFrames > 0 && savedFrames <= count ? savedFrames : 0;
       if (appendFrom === 0) {
-        const buffer = Buffer.allocUnsafe(CACHE_HEADER + count * CACHE_RECORD);
+        const buffer = Buffer.allocUnsafe(CACHE_HEADER + count * CACHE_RECORD + storedMarkers.length * CACHE_MARKER_RECORD);
         buffer.write(CACHE_MAGIC, 0, 'latin1');
         const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
         for (let i = 0; i < count; i += 1) writeRecord(view, CACHE_HEADER + i * CACHE_RECORD, i);
-        writeHeader(view, covered, count, digest, storedEvents, storedLastSeq);
+        writeMarkers(view, CACHE_HEADER + count * CACHE_RECORD, storedMarkers);
+        writeHeader(view, covered, count, digest, storedEvents, storedLastSeq, storedMarkers.length);
         fs.writeFileSync(cacheFile, buffer);
       } else {
         // Only new frames arrived: append them instead of rewriting a multi-megabyte table every
-        // time the session writes. The header goes last, so a crash in between leaves records the
-        // header does not claim (ignored by `loadCache`) rather than a count with no records.
+        // time the session writes. The marker section follows the frame records, so the tail write
+        // carries the new frames AND the (rewritten) markers; the header goes last, so a crash in
+        // between leaves records the header does not claim (ignored by `loadCache`).
         const handle = fs.openSync(cacheFile, 'r+');
         try {
           const added = count - appendFrom;
-          if (added > 0) {
-            const tail = Buffer.allocUnsafe(added * CACHE_RECORD);
-            const tailView = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
-            for (let i = 0; i < added; i += 1) writeRecord(tailView, i * CACHE_RECORD, appendFrom + i);
-            fs.writeSync(handle, tail, 0, tail.length, CACHE_HEADER + appendFrom * CACHE_RECORD);
-          }
+          const tail = Buffer.allocUnsafe(added * CACHE_RECORD + storedMarkers.length * CACHE_MARKER_RECORD);
+          const tailView = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
+          for (let i = 0; i < added; i += 1) writeRecord(tailView, i * CACHE_RECORD, appendFrom + i);
+          writeMarkers(tailView, added * CACHE_RECORD, storedMarkers);
+          fs.writeSync(handle, tail, 0, tail.length, CACHE_HEADER + appendFrom * CACHE_RECORD);
           const header = Buffer.alloc(CACHE_HEADER);
           header.write(CACHE_MAGIC, 0, 'latin1');
           const headerView = new DataView(header.buffer, header.byteOffset, header.byteLength);
-          writeHeader(headerView, covered, count, digest, storedEvents, storedLastSeq);
+          writeHeader(headerView, covered, count, digest, storedEvents, storedLastSeq, storedMarkers.length);
           fs.writeSync(handle, header, 0, header.length, 0);
         } finally {
           fs.closeSync(handle);
         }
       }
       savedFrames = count;
+      savedMarkerCount = storedMarkers.length;
       lastSavedOffset = covered;
       cacheUsable = true;
       return true;
@@ -609,6 +684,7 @@ export function createLogIndex(file, options = {}) {
   }
 
   let lastSavedOffset = -1;
+  let savedMarkerCount = 0;
   const adopted = loadCache();
 
   const api = {
@@ -625,11 +701,19 @@ export function createLogIndex(file, options = {}) {
     get lastSeq() {
       return lastSeq;
     },
+    /** `session/end-seed` markers in log order: { seq, inherited, frame }. */
+    get endSeedMarkers() {
+      return markers.slice();
+    },
     get scannedTo() {
       return scannedTo;
     },
     get complete() {
       return complete;
+    },
+    /** Whether every indexed seq is dense (no gap, no duplicate) within and across frames. */
+    get dense() {
+      return dense;
     },
     // Four push-arrays including over-allocation and possible double elements. This is a
     // conservative cache weight, not a claim to measure V8's exact backing-store capacity.
@@ -710,6 +794,10 @@ export function createLogIndexSync(file, options = {}) {
 const HYDRATED = new Map();
 const HYDRATED_BYTES = new Map();
 let hydratedBytes = 0;
+// One oversized payload (above the per-entry ceiling) is remembered outside the LRU so consecutive
+// getter reads of the SAME huge event reuse one parse instead of re-parsing it per key. It is a single
+// slot, so it adds at most one payload to residency — the one currently being read.
+let OVERSIZED = null;
 let HYDRATION_LIMIT = 256;
 // Counting entries bounds nothing: the 256 largest lines of a real log are 21.4 MB of JSON while the
 // 99th percentile line is 30 KB, so one pass over a log with a few captured files resident hundreds
@@ -754,6 +842,7 @@ export function clearHydration() {
   HYDRATED.clear();
   HYDRATED_BYTES.clear();
   hydratedBytes = 0;
+  OVERSIZED = null;
   return cached;
 }
 
@@ -788,29 +877,39 @@ function getterFor(key) {
 }
 
 /**
- * Rough resident size of a hydrated payload.
+ * Resident size of a hydrated payload, walked in full.
  *
- * `JSON.stringify` would allocate a second copy of exactly the strings this is meant to bound, so
- * walk the object instead and stop once the answer cannot matter any more. Strings are UTF-16 and
- * the payloads here are mostly long tool output, so characters times two is a close estimate.
+ * This is the number the byte budget enforces, so it must not undercount: an earlier version stopped
+ * the walk at 1 MB and answered 64 for anything deeper than four levels, which let a payload of many
+ * medium children (a parsed table, a long file listing) cache as ~1 MB while holding hundreds. The
+ * budget then bounded the estimate, not the heap, and a handful of such payloads re-created the very
+ * OOM this plugin exists to prevent. The walk is iterative (no recursion limit) and counts every
+ * string at two bytes per UTF-16 character plus a header per string, key and object. It is O(payload),
+ * the same order as the JSON.parse that produced the value.
  */
-function estimateBytes(value, depth = 0) {
-  if (value === null || typeof value !== 'object') {
-    if (typeof value === 'string') return value.length * 2;
+function estimateBytes(value) {
+  const scalar = (item) => {
+    if (typeof item === 'string') return 16 + item.length * 2;
     return 8;
-  }
-  if (depth > 4) return 64;
+  };
+  if (value === null || typeof value !== 'object') return scalar(value);
   let total = 32;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      total += estimateBytes(item, depth + 1);
-      if (total > 1 << 20) break;
+  const stack = [value];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (Array.isArray(current)) {
+      for (const item of current) {
+        if (item !== null && typeof item === 'object') { total += 32; stack.push(item); }
+        else total += scalar(item);
+      }
+    } else {
+      for (const key of Object.keys(current)) {
+        total += 16 + key.length * 2;
+        const child = current[key];
+        if (child !== null && typeof child === 'object') { total += 32; stack.push(child); }
+        else total += scalar(child);
+      }
     }
-    return total;
-  }
-  for (const key of Object.keys(value)) {
-    total += key.length * 2 + estimateBytes(value[key], depth + 1);
-    if (total > 1 << 20) break;
   }
   return total;
 }
@@ -843,13 +942,17 @@ function loadEvent(seq, hydrate) {
     HYDRATED.set(key, hit);
     return hit;
   }
+  if (OVERSIZED !== null && OVERSIZED.key === key) return OVERSIZED.value;
   const value = hydrate(seq);
   const size = estimateBytes(value);
   if (size <= entryCeiling()) {
+    OVERSIZED = null;
     HYDRATED.set(key, value);
     HYDRATED_BYTES.set(key, size);
     hydratedBytes += size;
     evict();
+  } else {
+    OVERSIZED = { key, value };
   }
   return value;
 }
@@ -885,6 +988,79 @@ export function lazyEvent(event, seq, hydrate) {
     __bytes: { value: bytes, enumerable: false },
   });
   return view;
+}
+
+/**
+ * One open-time lazy view: the whole event lives on disk, including its identity fields.
+ *
+ * The post-open `lazyEvent` copies identity from a resident event; at open time no event is resident
+ * yet, so every envelope key becomes a getter instead. That is faithful because the envelope is a
+ * CLOSED key set — the Host's seed validation rejects any key outside these seven — so a fixed-key
+ * view cannot drop a field. `seq` stays a real value: the frame index already knows it, and the
+ * Host's contiguity check reads it for every event without paying a hydration.
+ *
+ * The view is frozen and its hydrate must return deeply frozen events: the persistence seam hands
+ * these out as `shared-frozen`, and consumers rely on that immutability without copying.
+ */
+const OPEN_ENVELOPE_KEYS = ['type', 'time', 'data', 'surfaceOp', 'sourceEventSeqs', 'ignorable'];
+
+export function lazyOpenEvent(seq, hydrate) {
+  const view = {};
+  const descriptors = {
+    seq: { value: seq, enumerable: true, writable: false, configurable: false },
+  };
+  for (const key of OPEN_ENVELOPE_KEYS) {
+    descriptors[key] = { get: getterFor(key), enumerable: true, configurable: false };
+  }
+  Object.defineProperties(view, descriptors);
+  Object.defineProperties(view, {
+    __seq: { value: seq, enumerable: false },
+    __owner: { value: hydrate, enumerable: false },
+    __lazy: { value: true, enumerable: false },
+  });
+  return Object.freeze(view);
+}
+
+/** Deep-freeze one freshly parsed JSON tree (no cycles by construction). */
+export function freezeDeep(value) {
+  if (value === null || typeof value !== 'object') return value;
+  if (Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const key of Object.keys(value)) freezeDeep(value[key]);
+  return value;
+}
+
+/**
+ * Build the per-event guard shared by the open-time wrapper and the post-open tick.
+ *
+ * The host's eager decode refuses a stored log through a vocabulary gate (unknown event types that
+ * are not `ignorable`), the retired `request/header` fallback shape, and per-event adoption. The lazy
+ * path skips the eager decoder, so it must reproduce those refusals itself or it would silently
+ * accept a log written by a newer harness — exactly what the host's fail-closed vocabulary exists to
+ * prevent. `guard.known` is the HOST's own `KNOWN_SESSION_EVENT_TYPES` (resolved at runtime, never a
+ * hardcoded copy that could drift); `guard.adopt` is the host's `adoptSessionEvent`. When the host
+ * vocabulary could not be resolved, `guard.known` stays null and the open-time wrapper falls back to
+ * the eager decode rather than serving unvalidated views.
+ *
+ * @param guard - shared mutable `{ known: ReadonlySet|null, adopt: function|null }`.
+ * @param file - the log path, used only to name the session in refusal messages.
+ * @returns a function that validates and deeply freezes one freshly parsed event.
+ */
+export function makeEventGuard(guard, file) {
+  const id = file ? path.basename(path.dirname(file)) : 'session';
+  return (event) => {
+    if (event === null || typeof event !== 'object') return event;
+    const known = guard?.known;
+    if (known && !known.has(event.type) && event.ignorable !== true) {
+      throw new Error(`session "${id}" contains event type "${event.type}" (seq ${event.seq}) unknown to this harness and not marked ignorable; refusing to interpret the log — it was likely written by a newer harness`);
+    }
+    if (event.type === 'request/header' && event.data !== null && typeof event.data === 'object'
+      && event.data.reason === 'fallback') {
+      throw new Error(`session "${id}" contains a request/header event (seq ${event.seq}) with the unsupported legacy reason "fallback"; refusing to interpret the log`);
+    }
+    if (typeof guard?.adopt === 'function') guard.adopt(event);
+    return freezeDeep(event);
+  };
 }
 
 /**
@@ -946,11 +1122,13 @@ export function substituteLog(log, index, { keepFrom, types, from = 0, hydrate =
   for (let i = start; i < keepFrom; i += 1) {
     const event = log[i];
     if (!event || typeof event !== 'object') continue;
-    if (keep !== null && !keep.has(event.type)) continue;
+    // Skip an already-lazy view of this index BEFORE reading its type: on an open-time view `type`
+    // is a getter, so filtering on it first would hydrate every payload just to decide to skip it.
     if (event.__lazy === true && event.__owner === hydrate) {
       skipped += 1;
       continue;
     }
+    if (keep !== null && !keep.has(event.type)) continue;
     // Key on the event's own seq, never on the array position. The index is built from the
     // `"seq":` field in each log line, and the file starts with records that carry no seq at all
     // (`session/header`), so position and seq diverge by at least one. Keying on `i` hydrated the

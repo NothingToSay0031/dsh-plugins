@@ -32,7 +32,10 @@ function makeHandle(pool, file, options) {
     }
     // Disk caches deliberately hold back the final frame. A cold read may need that frame.
     if (!index.has(seq)) index.advance(Infinity);
-    return index.hydrate(seq);
+    const event = index.hydrate(seq);
+    // The shared guard (vocabulary refusal + adoption + deep freeze) lives on the handle so the
+    // open-time wrapper and the post-open tick hydrate through the SAME function and share an owner.
+    return options.validate ? options.validate(event) : event;
   });
   handle = Object.freeze({ file, proof, options: Object.freeze({ ...options }), hydrate });
   return handle;

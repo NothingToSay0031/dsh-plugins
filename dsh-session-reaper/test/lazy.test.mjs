@@ -742,6 +742,43 @@ test('a single payload larger than the per-entry ceiling is served but never cac
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('a payload of many medium children is counted in full, not capped at 1 MB', () => {
+  clearHydration();
+  setHydrationLimit(256, 8 * 1024 * 1024); // ceiling 2 MB; the payload below is ~1.7 MB of many small objects
+  const { dir, file } = scratch('manychildren');
+  const rows = Array.from({ length: 15_000 }, (_, i) => ({ i, s: 'abcdefghij' }));
+  const events = [{ type: 'tool/result', seq: 0, time: 1, data: { rows } }];
+  fs.writeFileSync(file, frameOf(events.map((event) => JSON.stringify(event))));
+  const index = createLogIndexSync(file);
+  const view = lazyEvent(events[0], 0, index.hydrate);
+  assert.equal(view.data.rows.length, 15_000);
+  const stats = hydrationStats();
+  // The old walk stopped at 1 MB and would have reported ~1 MB; the real resident size is larger.
+  assert.ok(stats.bytes > 1_500_000, `the full payload is counted (${stats.bytes} bytes)`);
+  assert.ok(stats.bytes <= 8 * 1024 * 1024, 'and stays inside the budget');
+  assert.equal(stats.cached, 1);
+  index.close();
+  setHydrationLimit(256, 64 * 1024 * 1024);
+  clearHydration();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('consecutive reads of one oversized payload reuse a single parse', () => {
+  clearHydration();
+  setHydrationLimit(8, 4 * 1024 * 1024); // ceiling 1 MB
+  const real = { type: 'tool/result', seq: 0, time: 1, data: { text: 'q'.repeat(600_000) } };
+  let calls = 0;
+  const hydrate = (seq) => { calls += 1; assert.equal(seq, 0); return structuredClone(real); };
+  const view = lazyEvent(real, 0, hydrate);
+  assert.equal(view.data.text.length, 600_000);
+  assert.equal(view.data.text.length, 600_000, 'a second read of the same oversized event');
+  assert.equal(view.type, 'tool/result', 'another key of the same event');
+  assert.equal(calls, 1, 'the oversized single slot served every key from one parse');
+  assert.equal(isHydrated(0, hydrate), false, 'it is still not in the bounded LRU');
+  setHydrationLimit(256, 64 * 1024 * 1024);
+  clearHydration();
+});
+
 
 
 // The telemetry file is append-only and outlives every instance that writes it, so its rows have to

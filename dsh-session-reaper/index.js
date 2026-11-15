@@ -29,8 +29,9 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { byteWindow, clearHydration, createTelemetryWriter, hydrationStats, isHydrated, setHydrationLimit, substituteLog, surfaceFloor } from './lazy.mjs';
+import { byteWindow, clearHydration, createTelemetryWriter, hydrationStats, isHydrated, makeEventGuard, setHydrationLimit, substituteLog, surfaceFloor } from './lazy.mjs';
 import { createLogIndexPool } from './index-pool.mjs';
+import { installLazyOpen } from './lazy-open.mjs';
 import v8 from 'node:v8';
 import { runInNewContext } from 'node:vm';
 
@@ -90,6 +91,21 @@ const DEFAULTS = {
   probe: false,
   /** Optional explicit log path for lazy mode; resolved from the sessions root when empty. */
   lazyLogFile: '',
+  /**
+   * Serve large session logs as lazy views AT OPEN TIME instead of decoded resident events.
+   *
+   * The Host normally decodes the whole log into memory when a session opens and keeps it there:
+   * measured on this machine, ~2x the on-disk size (a 279 MB log becomes ~1.7 GB of heap). With
+   * this on, the jsonl backend's decode step returns lightweight views whose payloads are read
+   * from the zstd frames on demand and evicted by the same bounded hydration cache as post-open
+   * reaping. Open time does not shrink — the Session still validates and folds every event — but
+   * resident memory stops following the log size. Requires `enabled` and `dryRun: false`.
+   */
+  lazyOpen: true,
+  /** Logs smaller than this (MB) keep the original eager decode; the view overhead is not worth it. */
+  lazyOpenMinMB: 16,
+  /** Milliseconds per event-loop turn the open-time index scan may spend before yielding. */
+  lazyOpenBudgetMs: 250,
   /** Walk the derived/projection structures and report their resident string volume. */
   measureDerived: false,
   /** Weigh every field of a loaded Session separately, to locate the resident bytes. */
@@ -199,6 +215,9 @@ function normalizeConfig(raw) {
   cfg.gcEvery = Math.max(Number(cfg.gcEvery) || DEFAULTS.gcEvery, 1);
   cfg.hotWindowMs = Math.max(Number(cfg.hotWindowMs) || 0, 0);
   cfg.hydrationCacheMB = Math.max(Number(cfg.hydrationCacheMB) || DEFAULTS.hydrationCacheMB, 4);
+  cfg.lazyOpen = cfg.lazyOpen === true;
+  cfg.lazyOpenMinMB = Math.max(Number(cfg.lazyOpenMinMB) || DEFAULTS.lazyOpenMinMB, 1);
+  cfg.lazyOpenBudgetMs = Math.max(Number(cfg.lazyOpenBudgetMs) || DEFAULTS.lazyOpenBudgetMs, 20);
   return cfg;
 }
 
@@ -274,6 +293,20 @@ export function apply(ctx, rawConfig) {
   const indexCacheDir = cfg.indexCacheDir || join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'cache', 'session-reaper-index');
   const indexPool = createLogIndexPool({ maxEntries: cfg.indexCacheSize, maxBytes: cfg.indexCacheMB * 1048576 });
   const indexHandles = new WeakMap();
+  // One handle per log file, shared by the open-time wrapper and the post-open tick: views from
+  // both paths then carry the SAME owner, so the tick skips them instead of re-wrapping (which
+  // would hydrate every identity field once). Invalid handles are replaced on the next acquire.
+  // The shared vocabulary guard is filled by installLazyOpen from the host at first decode; every
+  // handle validates through it, so both paths refuse the same logs the eager decoder refuses.
+  const vocabGuard = { known: null, adopt: null, resolved: false };
+  const handlesByFile = new Map();
+  const handleForFile = (file, id) => {
+    let handle = handlesByFile.get(file);
+    if (handle && !indexPool.isInvalid(handle)) return handle;
+    handle = indexPool.createHandle(file, { cacheFile: join(indexCacheDir, `${id}.idx`), validate: makeEventGuard(vocabGuard, file) });
+    handlesByFile.set(file, handle);
+    return handle;
+  };
   const DEFERRED = { deferred: true };
   let buildsThisTick = 0;
   // Cold scans only: adopting a cached table is cheap enough to do for every session in one tick.
@@ -327,7 +360,7 @@ export function apply(ctx, rawConfig) {
     if (!handle) {
       const file = sessionLogFile(id, cfg.lazyLogFile);
       if (!file) return null;
-      handle = indexPool.createHandle(file, { cacheFile });
+      handle = handleForFile(file, id);
       indexHandles.set(session, handle);
     }
     return handle;
@@ -344,6 +377,9 @@ export function apply(ctx, rawConfig) {
   if (!listSessions) return;
 
   let stopped = false;
+  // Installed once the persistence service is resolvable; retried on every tick until then, so a
+  // backend mounted after this plugin still gets the wrapper before its first tick-time open.
+  let uninstallLazyOpen = null;
 
   // One row per tick, forever: at a 30 s interval this file passes a gigabyte in a year, and nobody
   // reads the old half of it. Rotating once past this size keeps the recent history greppable.
@@ -942,6 +978,7 @@ export function apply(ctx, rawConfig) {
     // A superseded instance must stay silent: its timer survives the reload that created us.
     if (REGISTRY.active !== me) return;
     ticks += 1;
+    ensureLazyOpen();
     try {
       record({ tick: ticks, dryRun: cfg.dryRun, ...reap() });
     } catch (error) {
@@ -975,11 +1012,26 @@ export function apply(ctx, rawConfig) {
     usedGlobalTimer = true;
   }
 
+  const ensureLazyOpen = () => {
+    if (uninstallLazyOpen !== null || !cfg.lazyOpen || cfg.dryRun) return;
+    try {
+      uninstallLazyOpen = installLazyOpen({ ctx, cfg, pool: indexPool, handleForFile, record, guard: vocabGuard });
+    } catch {
+      /* a backend that cannot be wrapped simply keeps its eager decode */
+    }
+  };
+  ensureLazyOpen();
+
   try {
     ctx.on('dispose', () => {
       stopped = true;
       try {
         stopTimer?.();
+      } catch {
+        /* ignore */
+      }
+      try {
+        uninstallLazyOpen?.();
       } catch {
         /* ignore */
       }

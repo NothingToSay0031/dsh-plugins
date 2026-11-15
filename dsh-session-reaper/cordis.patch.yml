@@ -22,6 +22,12 @@
         indexBuildsPerTick: 1   # how many cold sessions may start scanning in one tick
         indexCacheSize: 16      # how many frame tables stay warm
         indexCacheMB: 64        # conservative byte limit; old views never pin an evicted table
+        # Open-time lazy load: large logs open as on-demand views instead of resident decoded
+        # events. Resident memory stops following log size; open TIME is unchanged (the Session
+        # still validates every event). Falls back to eager decode on any guard failure.
+        lazyOpen: true
+        lazyOpenMinMB: 16       # logs smaller than this keep the original eager decode
+        lazyOpenBudgetMs: 250   # per-turn budget for the open-time index scan
       #   intervalMs: 30000
       #   triggerMB: 64         # only act when heapUsed is above this
       #   minStringLen: 256     # only for mode: blank
