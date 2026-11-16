@@ -26,7 +26,7 @@
  * best-effort.
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { byteWindow, clearHydration, createTelemetryWriter, hydrationStats, isHydrated, makeEventGuard, setHydrationLimit, substituteLog, surfaceFloor } from './lazy.mjs';
@@ -41,6 +41,13 @@ export const name = 'local-session-reaper';
 // instances then walk every session at once, which is pure cost and was visible as interleaved tick
 // numbers in the telemetry. The registry lives on globalThis so it is shared across instances.
 const REGISTRY = (globalThis.__dshSessionReaper ??= { seq: 0, active: 0 });
+// Telemetry identifies the build, so a reload that silently kept an older module is visible.
+let VERSION = '';
+try {
+  VERSION = String(JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')).version ?? '');
+} catch {
+  /* version is telemetry-only */
+}
 export const inject = ['sessions'];
 
 const DEFAULTS = {
@@ -92,16 +99,20 @@ const DEFAULTS = {
   /** Optional explicit log path for lazy mode; resolved from the sessions root when empty. */
   lazyLogFile: '',
   /**
-   * Serve large session logs as lazy views AT OPEN TIME instead of decoded resident events.
+   * Opt-in: serve large session logs with memory-headroom-adaptive residency at open time.
    *
-   * The Host normally decodes the whole log into memory when a session opens and keeps it there:
-   * measured on this machine, ~2x the on-disk size (a 279 MB log becomes ~1.7 GB of heap). With
-   * this on, the jsonl backend's decode step returns lightweight views whose payloads are read
-   * from the zstd frames on demand and evicted by the same bounded hydration cache as post-open
-   * reaping. Open time does not shrink — the Session still validates and folds every event — but
-   * resident memory stops following the log size. Requires `enabled` and `dryRun: false`.
+   * OFF by default. The Host folds every event synchronously and message projections read each
+   * message's `data`, so open-time lazy views move decompress+parse into that synchronous fold and
+   * freeze the loop (starving every other session). The default eager decode yields while
+   * decompressing and post-open reaping bounds steady memory, which is the proven-good balance.
+   * When enabled, this mode keeps as much of the log resident as available V8 headroom allows
+   * (pre-decoded in a yielding pass) and serves only the uncovered tail as lazy views; when the
+   * whole log fits headroom it falls back to eager entirely. See docs/lazy-open-design.md.
+   * Requires `enabled` and `dryRun: false`.
    */
-  lazyOpen: true,
+  lazyOpen: false,
+  /** Safety margin (MB) subtracted from V8 headroom when sizing the resident prefix at open. */
+  lazyOpenHeadroomMB: 1024,
   /** Logs smaller than this (MB) keep the original eager decode; the view overhead is not worth it. */
   lazyOpenMinMB: 16,
   /** Milliseconds per event-loop turn the open-time index scan may spend before yielding. */
@@ -217,6 +228,7 @@ function normalizeConfig(raw) {
   cfg.hydrationCacheMB = Math.max(Number(cfg.hydrationCacheMB) || DEFAULTS.hydrationCacheMB, 4);
   cfg.lazyOpen = cfg.lazyOpen === true;
   cfg.lazyOpenMinMB = Math.max(Number(cfg.lazyOpenMinMB) || DEFAULTS.lazyOpenMinMB, 1);
+  cfg.lazyOpenHeadroomMB = Math.max(Number(cfg.lazyOpenHeadroomMB ?? DEFAULTS.lazyOpenHeadroomMB) || 0, 0);
   cfg.lazyOpenBudgetMs = Math.max(Number(cfg.lazyOpenBudgetMs) || DEFAULTS.lazyOpenBudgetMs, 20);
   return cfg;
 }
@@ -1012,6 +1024,10 @@ export function apply(ctx, rawConfig) {
     usedGlobalTimer = true;
   }
 
+  // The backend may mount after this plugin, and startup restore opens sessions as soon as it
+  // exists. Waiting for the first 30 s tick left a window where a large log decoded eagerly to
+  // ~2x its size in heap; poll until the wrapper is in, then stop.
+  let lazyOpenRetry = null;
   const ensureLazyOpen = () => {
     if (uninstallLazyOpen !== null || !cfg.lazyOpen || cfg.dryRun) return;
     try {
@@ -1019,12 +1035,30 @@ export function apply(ctx, rawConfig) {
     } catch {
       /* a backend that cannot be wrapped simply keeps its eager decode */
     }
+    if (uninstallLazyOpen === null && lazyOpenRetry === null) {
+      lazyOpenRetry = setInterval(() => {
+        if (REGISTRY.active !== me) {
+          clearInterval(lazyOpenRetry);
+          lazyOpenRetry = null;
+          return;
+        }
+        ensureLazyOpen();
+        if (uninstallLazyOpen !== null && lazyOpenRetry !== null) {
+          clearInterval(lazyOpenRetry);
+          lazyOpenRetry = null;
+        }
+      }, 250);
+    }
   };
   ensureLazyOpen();
 
   try {
     ctx.on('dispose', () => {
       stopped = true;
+      if (lazyOpenRetry !== null) {
+        clearInterval(lazyOpenRetry);
+        lazyOpenRetry = null;
+      }
       try {
         stopTimer?.();
       } catch {
@@ -1045,7 +1079,7 @@ export function apply(ctx, rawConfig) {
 
   // `name` records which module build is live: the row id and this label are separate, and a reload
   // that silently kept an older instance would otherwise be invisible in the telemetry.
-  record({ event: 'loaded', name, config: cfg, logFile, timer: usedGlobalTimer ? 'global' : 'cordis' });
+  record({ event: 'loaded', name, version: VERSION, config: cfg, logFile, timer: usedGlobalTimer ? 'global' : 'cordis' });
 
   // First sample immediately: do not let the initial measurement depend on timer behaviour.
   try {

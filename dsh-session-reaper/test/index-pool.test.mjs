@@ -95,15 +95,18 @@ test('close releases every warm table but residual lazy views remain readable', 
   clearHydration();
 });
 
-test('a table exceeding the byte budget is served ephemerally, not retained', () => {
-  const a = fixture('oversize');
+test('an over-budget table stays warm while it is the active reader, and yields once superseded', () => {
+  const a = fixture('oversize'), b = fixture('eviction');
   const pool = createLogIndexPool({ maxEntries: 4, maxBytes: 1 });
   try {
     const handle = ready(pool, a);
-    assert.equal(pool.stats().entries, 0);
+    // Evicting the active reader here would force the next read to re-adopt the whole table.
+    assert.equal(pool.stats().entries, 1);
     assert.equal(handle.hydrate(7).data.text, 'oversize-7');
-    assert.equal(pool.stats().entries, 0);
-    assert.equal(pool.stats().bytes, 0);
+    assert.equal(pool.stats().entries, 1);
+    ready(pool, b);
+    assert.equal(pool.has(handle), false);
+    assert.equal(pool.stats().entries, 1);
   } finally { pool.close(); }
 });
 

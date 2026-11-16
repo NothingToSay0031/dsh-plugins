@@ -11,6 +11,7 @@ import zlib from 'node:zlib';
 import {
   byteWindow,
   clearHydration,
+  estimateBytes,
   eventBytes,
   surfaceFloor,
   createLogIndex,
@@ -19,9 +20,28 @@ import {
   hydrationStats,
   isHydrated,
   lazyEvent,
+  measuredParse,
+  measuredSizeOf,
   setHydrationLimit,
   substituteLog,
 } from '../lazy.mjs';
+
+test('the parse-time bound never undercounts the full walk', () => {
+  const shapes = [
+    {},
+    [1, 'x', null, true],
+    { a: 'x', b: { c: [1, 2, { d: 'y' }] }, '': { e: '' } },
+    { list: Array.from({ length: 40 }, (_, i) => ({ i, s: 's'.repeat(i) })) },
+    { unicode: '中文'.repeat(50), nested: { arr: [[[]]] } },
+    { rows: Array.from({ length: 2000 }, (_, i) => ({ i, s: 'abcdefghij' })) },
+  ];
+  for (const shape of shapes) {
+    const line = JSON.stringify(shape);
+    const bound = measuredSizeOf(measuredParse(line));
+    assert.ok(bound >= estimateBytes(shape), `bound ${bound} covers walk ${estimateBytes(shape)}: ${line.slice(0, 40)}`);
+    assert.ok(bound <= 44 * line.length + 64);
+  }
+});
 
 /** Build a session log: a header record, then `count` events spread over `frames` zstd frames. */
 function buildLog(dir, { count = 120, frames = 6, payload = 300 } = {}) {
@@ -742,9 +762,9 @@ test('a single payload larger than the per-entry ceiling is served but never cac
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('a payload of many medium children is counted in full, not capped at 1 MB', () => {
+test('a payload of many medium children is bounded above, never undercounted', () => {
   clearHydration();
-  setHydrationLimit(256, 8 * 1024 * 1024); // ceiling 2 MB; the payload below is ~1.7 MB of many small objects
+  setHydrationLimit(256, 8 * 1024 * 1024); // ceiling 2 MB
   const { dir, file } = scratch('manychildren');
   const rows = Array.from({ length: 15_000 }, (_, i) => ({ i, s: 'abcdefghij' }));
   const events = [{ type: 'tool/result', seq: 0, time: 1, data: { rows } }];
@@ -752,11 +772,12 @@ test('a payload of many medium children is counted in full, not capped at 1 MB',
   const index = createLogIndexSync(file);
   const view = lazyEvent(events[0], 0, index.hydrate);
   assert.equal(view.data.rows.length, 15_000);
+  // The O(1) bound (44x line chars) exceeds the 2 MB ceiling for this ~375 KB line, so the payload
+  // is served through the oversized single slot: never undercounted, never retained past budget.
   const stats = hydrationStats();
-  // The old walk stopped at 1 MB and would have reported ~1 MB; the real resident size is larger.
-  assert.ok(stats.bytes > 1_500_000, `the full payload is counted (${stats.bytes} bytes)`);
-  assert.ok(stats.bytes <= 8 * 1024 * 1024, 'and stays inside the budget');
-  assert.equal(stats.cached, 1);
+  assert.equal(stats.cached, 0);
+  assert.equal(stats.bytes, 0);
+  assert.equal(view.data.rows.length, 15_000, 'the single slot still serves repeat reads');
   index.close();
   setHydrationLimit(256, 64 * 1024 * 1024);
   clearHydration();

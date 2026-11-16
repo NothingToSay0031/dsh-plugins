@@ -356,7 +356,7 @@ export function createLogIndex(file, options = {}) {
       // Checking the clock every 64 frames assumed small frames. One frame here can be 4.5 MB of
       // input and 30 MB of text, so 64 of them would be gigabytes of work in a single tick before the
       // budget was consulted. A wide frame asks the clock every time.
-      const wide = frame.end - start > 1 << 18;
+      const wide = frame.end - start > (1 << 18);
       if ((wide || (added & 63) === 0) && Date.now() - startedAt >= budgetMs) break;
     }
     complete = scannedTo >= size;
@@ -737,7 +737,7 @@ export function createLogIndex(file, options = {}) {
       if (index < 0) throw new Error(`seq ${seq} is not present in ${file}`);
       framePayloads(index);
       for (let i = 0; i < cachedSeqs.length; i += 1) {
-        if (cachedSeqs[i] === seq) return JSON.parse(cachedLines[i]);
+        if (cachedSeqs[i] === seq) return measuredParse(cachedLines[i]);
       }
       throw new Error(`seq ${seq} mapped to frame ${index} but absent from it`);
     },
@@ -887,7 +887,7 @@ function getterFor(key) {
  * string at two bytes per UTF-16 character plus a header per string, key and object. It is O(payload),
  * the same order as the JSON.parse that produced the value.
  */
-function estimateBytes(value) {
+export function estimateBytes(value) {
   const scalar = (item) => {
     if (typeof item === 'string') return 16 + item.length * 2;
     return 8;
@@ -934,6 +934,30 @@ function evict() {
   }
 }
 
+/** Sizes measured during JSON.parse, keyed by the parsed root; avoids a second full walk. */
+const MEASURED = new WeakMap();
+
+/**
+ * Parse one event line and record an O(1) proven upper bound of what `estimateBytes` would count.
+ * For a line of L characters: object/array nodes <= L/2 (each brace pair costs >= 2 chars), keys
+ * and strings each <= L/2 in count with total name/content chars <= L, other scalars <= L. Under
+ * the full-walk rules (32/node, 16+2/char per key and string, 8/scalar) that sums to <= 44*L.
+ * The bound only overcounts, so the byte budget stays a true ceiling; a reviver-based exact
+ * measure was tried and lost JSON.parse's fast path, costing more than the walk it replaced.
+ * @param line - one JSONL event record.
+ * @returns the parsed event, with its bound retrievable via `measuredSizeOf`.
+ */
+export function measuredParse(line) {
+  const value = JSON.parse(line);
+  if (value !== null && typeof value === 'object') MEASURED.set(value, 44 * line.length + 64);
+  return value;
+}
+
+/** The parse-time measurement of a value produced by `measuredParse`, when present. */
+export function measuredSizeOf(value) {
+  return MEASURED.get(value);
+}
+
 function loadEvent(seq, hydrate) {
   const key = cacheKey(seq, hydrate);
   const hit = HYDRATED.get(key);
@@ -944,7 +968,7 @@ function loadEvent(seq, hydrate) {
   }
   if (OVERSIZED !== null && OVERSIZED.key === key) return OVERSIZED.value;
   const value = hydrate(seq);
-  const size = estimateBytes(value);
+  const size = MEASURED.get(value) ?? estimateBytes(value);
   if (size <= entryCeiling()) {
     OVERSIZED = null;
     HYDRATED.set(key, value);

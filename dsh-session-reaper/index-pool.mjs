@@ -66,9 +66,16 @@ export function createLogIndexPool({ maxEntries, maxBytes }) {
   }
   function trim() {
     let retained = bytes();
+    let mru = null;
+    for (const handle of entries.keys()) mru = handle;
     for (const [handle, entry] of entries) {
       if (!coldOnly && entries.size <= maxEntries && retained <= maxBytes) break;
       if (entry.uses > 0) continue;
+      // The MRU entry is the one being read right now. Its single decoded-frame cache can push it
+      // over the byte budget; evicting it there only forces the next read to re-adopt the whole
+      // table, turning a sequential pass into O(reads × adoption) — the open-time fold of a large
+      // log then starves the Host loop for minutes. Keep it warm until LRU order supersedes it.
+      if (!coldOnly && handle === mru && entries.size <= maxEntries) continue;
       retained -= entry.index.retainedBytes();
       remove(handle, entry);
     }

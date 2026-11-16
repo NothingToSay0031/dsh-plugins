@@ -180,7 +180,7 @@ function harness(dir, { original, known = TEST_KNOWN } = {}) {
   };
   const uninstall = installLazyOpen({
     ctx,
-    cfg: { lazyOpenMinMB: 1, lazyOpenBudgetMs: 250 },
+    cfg: { lazyOpenMinMB: 1, lazyOpenBudgetMs: 250, lazyOpenHeadroomMB: 1e9 },
     pool,
     handleForFile,
     record: (row) => rows.push(row),
@@ -330,7 +330,7 @@ test('uninstall restores the original, and a superseded install survives an olde
   const rows2 = [];
   const second = installLazyOpen({
     ctx: { get: () => first.backend },
-    cfg: { lazyOpenMinMB: 1, lazyOpenBudgetMs: 250 },
+    cfg: { lazyOpenMinMB: 1, lazyOpenBudgetMs: 250, lazyOpenHeadroomMB: 1e9 },
     pool: first.pool,
     handleForFile: (f, id) => first.pool.createHandle(f, {
       cacheFile: path.join(first.cacheDir, `${id}.idx`),
@@ -351,7 +351,7 @@ test('uninstall restores the original, and a superseded install survives an olde
 test('an absent or foreign backend is left untouched', () => {
   const rows = [];
   const pool = createLogIndexPool({ maxEntries: 1, maxBytes: 1048576 });
-  const deps = { cfg: { lazyOpenMinMB: 1, lazyOpenBudgetMs: 250 }, pool, handleForFile: () => {}, record: (r) => rows.push(r) };
+  const deps = { cfg: { lazyOpenMinMB: 1, lazyOpenBudgetMs: 250, lazyOpenHeadroomMB: 1e9 }, pool, handleForFile: () => {}, record: (r) => rows.push(r) };
   assert.equal(installLazyOpen({ ...deps, ctx: { get: () => undefined } }), null);
   assert.equal(installLazyOpen({ ...deps, ctx: { get: () => { throw new Error('inactive'); } } }), null);
   const foreign = { name: 'session-persistence-other', decodeStoredLog: async () => {}, readStoredLog: async () => {} };

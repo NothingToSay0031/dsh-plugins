@@ -21,6 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { getHeapStatistics } from 'node:v8';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { lazyOpenEvent } from './lazy.mjs';
@@ -241,8 +242,27 @@ export function installLazyOpen({ ctx, cfg, pool, handleForFile, record, guard }
     // host adoption, deep freeze). Using it directly as the views' owner is what lets the post-open
     // tick recognise these views as its own and skip re-wrapping them.
     const hydrate = handle.hydrate;
+    // Memory-headroom-adaptive residency. The Host folds every event synchronously, so a payload
+    // read during that fold blocks the loop. Keep as much of the log resident as available headroom
+    // allows (decoded here, yielding, so the fold reads it cheaply) and serve only the uncovered
+    // tail as lazy views. When the whole log fits, fall back to eager entirely (no freeze at all);
+    // when headroom is tiny, serve (almost) all lazy to bound the peak instead of OOMing.
+    const headroom = getHeapStatistics().heap_size_limit - process.memoryUsage().heapUsed
+      - Math.max(0, Number(cfg.lazyOpenHeadroomMB) || 0) * 1048576;
+    const residentEstimate = buffer.byteLength * 2;
+    if (residentEstimate <= headroom) return null;
+    const avgResident = residentEstimate / shape.events;
+    const residentCut = Math.max(0, Math.min(shape.events, Math.floor(headroom / avgResident)));
     const events = new Array(shape.events);
-    for (let seq = 0; seq < shape.events; seq += 1) events[seq] = lazyOpenEvent(seq, hydrate);
+    for (let seq = 0; seq < residentCut; seq += 1) {
+      events[seq] = hydrate(seq);
+      // Spread the resident pre-pass over event-loop turns; it must not stall the loop either.
+      if ((seq & 1023) === 1023) {
+        signal?.throwIfAborted();
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    }
+    for (let seq = residentCut; seq < shape.events; seq += 1) events[seq] = lazyOpenEvent(seq, hydrate);
     Object.freeze(events);
     const stored = {
       status: 'current',
@@ -254,6 +274,7 @@ export function installLazyOpen({ ctx, cfg, pool, handleForFile, record, guard }
       inheritedEventCount: cut,
       revision,
     };
+    record({ event: 'lazy-open-resident', id: String(expectedId), residentCut, events: shape.events, headroomMB: Math.round(headroom / 1048576) });
     // Hand the next open at this revision the same views instead of a rebuild; every local
     // mutation invalidates the memo entry, exactly as for an eagerly decoded log.
     if (typeof backend.memoizeStoredLog === 'function') backend.memoizeStoredLog(expectedId, stored);

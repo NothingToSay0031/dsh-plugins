@@ -1,12 +1,12 @@
 {
   "name": "@local/dsh-session-reaper",
-  "version": "0.8.1",
+  "version": "0.8.5",
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "Keeps historical session payloads on disk and re-reads them on demand, serves large logs as lazy views at open time, and evicts the Host's reusable session caches when memory is tight.",
+  "description": "Keeps historical session payloads on disk and re-reads them on demand, optionally serves large logs as lazy views at open time, and evicts the Host's reusable session caches when memory is tight.",
   "exports": { ".": "./index.js", "./locale/*.json": "./locale/*.json", "./icon": "./icon.svg" },
-  "files": ["index.js", "lazy.mjs", "lazy-open.mjs", "index-pool.mjs", "cordis.patch.yml", "locale/*.json", "icon.svg"],
+  "files": ["index.js", "lazy.mjs", "lazy-open.mjs", "index-pool.mjs", "cordis.patch.yml", "locale/*.json", "icon.svg", "docs/*.md"],
   "scripts": {
     "check": "node --check index.js && node --check lazy.mjs && node --check lazy-open.mjs && node --check index-pool.mjs",
     "test": "node --test test/*.test.mjs"
