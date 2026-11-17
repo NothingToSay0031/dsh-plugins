@@ -126,14 +126,22 @@ window.__ModuleLoader__.load({
         '--dsw-static-neutral-850': { light: 'rgba(250, 252, 255, 0.72)', dark: 'rgba(42, 48, 64, 0.76)' },
         '--dsw-static-neutral-800': { light: 'rgba(250, 252, 255, 0.86)', dark: 'rgba(52, 58, 76, 0.88)' },
         /**
-         * The Sidebar session hover card is the one floating surface the body layer cannot reach on
-         * its own: `ui-primitives`' HoverCard declares `--dsw-hovercard-bg: #2C2C2E` on the card
-         * element itself, and an element's own declaration beats every inherited value, so the card
-         * ignores the token written here until the compat stylesheet hands the decision back to the
-         * body (`--dsw-hovercard-bg: inherit`). The value mirrors the material's own card glass
-         * (`bg-layer-2`), so the card reads like every other card instead of a black slab.
+         * The Sidebar session hover card. The platform paints it as a fixed dark slab in both
+         * themes: `ui-primitives`' card rule reads `--dsw-alias-hovercard-bg` — the static dark
+         * blue-grey — and the card's parts read the three `--dsw-alias-hovercard-label-*` steps such
+         * a surface needs. All four are aliases declared on `body`, unlike the element-local
+         * variable of earlier builds, so this layer repaints them like every other surface: the
+         * card's surface becomes the material's own card glass (`bg-layer-2`), and its three ink
+         * steps are handed back to the theme's own label tokens. Forwarding rather than picking
+         * three greys per palette is what keeps the card reading like the rest of the UI — the
+         * hierarchy stays the platform's, follows light/dark and every palette for free, and stays
+         * solid at the top of the opacity slider, where a translucent ink would wash out. The
+         * status dots keep the platform's semantic `-state-*` tokens, which read on any surface.
          */
-        '--dsw-hovercard-bg': { light: 'rgba(250, 252, 255, 0.72)', dark: 'rgba(42, 48, 64, 0.76)' },
+        '--dsw-alias-hovercard-bg': { light: 'rgba(250, 252, 255, 0.72)', dark: 'rgba(42, 48, 64, 0.76)' },
+        '--dsw-alias-hovercard-label-primary': { light: 'var(--dsw-alias-label-primary)', dark: 'var(--dsw-alias-label-primary)' },
+        '--dsw-alias-hovercard-label-secondary': { light: 'var(--dsw-alias-label-secondary)', dark: 'var(--dsw-alias-label-secondary)' },
+        '--dsw-alias-hovercard-label-tertiary': { light: 'var(--dsw-alias-label-tertiary)', dark: 'var(--dsw-alias-label-tertiary)' },
         '--dsw-alias-bg-module-platform': {
           light: 'linear-gradient(180deg, rgba(234, 240, 250, 0.86) 0%, rgba(227, 235, 248, 0.80) 100%)',
           dark: 'linear-gradient(180deg, rgba(31, 36, 49, 0.84) 0%, rgba(25, 29, 40, 0.80) 100%)',
@@ -262,8 +270,11 @@ window.__ModuleLoader__.load({
         '--dsw-static-neutral-100': { light: 'rgba(255, 255, 255, 0.92)', dark: 'rgba(60, 56, 88, 0.88)' },
         '--dsw-static-neutral-850': { light: 'rgba(255, 255, 255, 0.78)', dark: 'rgba(48, 45, 72, 0.74)' },
         '--dsw-static-neutral-800': { light: 'rgba(255, 255, 255, 0.92)', dark: 'rgba(60, 56, 88, 0.88)' },
-        /** The hover card's own surface, on this palette's glass. */
-        '--dsw-hovercard-bg': { light: 'rgba(255, 255, 255, 0.78)', dark: 'rgba(48, 45, 72, 0.74)' },
+        /** The hover card's surface, and the theme's own three ink steps over it. */
+        '--dsw-alias-hovercard-bg': { light: 'rgba(255, 255, 255, 0.78)', dark: 'rgba(48, 45, 72, 0.74)' },
+        '--dsw-alias-hovercard-label-primary': { light: 'var(--dsw-alias-label-primary)', dark: 'var(--dsw-alias-label-primary)' },
+        '--dsw-alias-hovercard-label-secondary': { light: 'var(--dsw-alias-label-secondary)', dark: 'var(--dsw-alias-label-secondary)' },
+        '--dsw-alias-hovercard-label-tertiary': { light: 'var(--dsw-alias-label-tertiary)', dark: 'var(--dsw-alias-label-tertiary)' },
         '--dsw-alias-bg-module-platform': {
           light: 'linear-gradient(180deg, rgba(234, 235, 250, 0.86) 0%, rgba(230, 230, 248, 0.80) 100%)',
           dark: 'linear-gradient(180deg, rgba(34, 32, 54, 0.84) 0%, rgba(26, 25, 42, 0.80) 100%)',
@@ -586,7 +597,7 @@ window.__ModuleLoader__.load({
       '--dsw-static-neutral-100',
       '--dsw-static-neutral-850',
       '--dsw-static-neutral-800',
-      '--dsw-hovercard-bg',
+      '--dsw-alias-hovercard-bg',
     ];
     const FROST_SOLID = [
       '--dsw-alias-markdown-inline-code',
@@ -660,28 +671,26 @@ window.__ModuleLoader__.load({
 
     /* __HOVERCARD_START__ */
     /**
-     * Three floating surfaces are out of the token layer's reach, and one stylesheet reaches all of
-     * them.
+     * Two floating surfaces need more than a token, and one stylesheet reaches both.
      *
-     * The Sidebar session hover card is the one surface the token layer cannot reach on its own.
-     * `ui-primitives`' HoverCard declares `--dsw-hovercard-bg: #2C2C2E` on the card element
-     * itself, and an element's own declaration of a custom property beats every inherited value —
-     * so a body-inline token, `!important` or not, never repaints that card (measured in the
-     * browser; `tools/check-materials.mjs` records the reach). The card's ink is the same story:
-     * `ui-workspace` and `ui-schedule` write literal light greys (#FFFFFF, #CFD3D6, #ADB2B8),
-     * because the card was a fixed dark surface in both themes.
+     * The Sidebar session hover card's surface and ink are ordinary aliases now — the card's rule
+     * paints `--dsw-alias-hovercard-bg` and its parts read the three `--dsw-alias-hovercard-label-*`
+     * steps, all declared on `body` — so the token layer is what turns the platform's fixed dark
+     * slab into the material's glass, ink included, and nothing here has to repaint either. What a
+     * token cannot add is a blur: the card's rule declares a translucent fill and no
+     * `backdrop-filter`, so without one the sidebar's own text reads through the card and the two
+     * layers of type sit on top of each other. The rim is the same story — a see-through card on a
+     * see-through sidebar has no edge of its own.
      *
-     * The tooltip and the toast are reachable by token, but only half of each: the tooltip's ink
-     * is a literal white in both palettes (`--dsw-static-neutral-bluish-00`) and the toast's action
+     * The tooltip and the toast are reachable by token, but only half of each: the tooltip's ink is
+     * a literal white in both palettes (`--dsw-static-neutral-bluish-00`) and the toast's action
      * link a literal deepseek-400, tuned for the dark banner the platform paints. Both notices
      * follow the theme now, so their ink has to follow it as well.
      *
-     * So this package themes them through one stylesheet that lives and dies with its effect.
-     * The selectors are read from the live stylesheets — the CSS modules hash their local names
-     * per build, so a name written here would be wrong on the next release — and the surface and
-     * the ink flip together: the fill is applied only once the card's own rule was found, and
-     * every text inside the card follows the theme's primary ink, so a part this package does not
-     * know still reads against the new surface.
+     * So this package themes them through one stylesheet that lives and dies with its effect. The
+     * selectors are read from the live stylesheets — the CSS modules hash their local names per
+     * build, so a name written here would be wrong on the next release — and a part whose surface
+     * is not on this build is simply left out.
      */
     /**
      * The surfaces that float over content and are painted with a see-through fill.
@@ -721,28 +730,17 @@ window.__ModuleLoader__.load({
       ['var(--dsh-chat-content-width)', 'var(--dsw-alias-state-warn-secondary)'],
     ];
 
-    const HOVER_CARD_INK = [
-      { local: 'hoverTitle', ink: '--dsw-alias-label-primary' },
-      { local: 'hoverPath', ink: '--dsw-alias-label-secondary' },
-      { local: 'hoverTime', ink: '--dsw-alias-label-secondary' },
-      { local: 'hoverStatus', ink: '--dsw-alias-label-tertiary' },
-      { local: 'taskName', ink: '--dsw-alias-label-primary' },
-      { local: 'taskTiming', ink: '--dsw-alias-label-secondary' },
-      { local: 'taskRelative', ink: '--dsw-alias-label-tertiary' },
-      { local: 'taskIcon', ink: '--dsw-alias-label-secondary' },
-      { local: 'omitted', ink: '--dsw-alias-label-tertiary' },
-      { local: 'copied', ink: '--dsw-alias-label-primary' },
-    ];
+    /**
+     * The token the card's own rule paints with. The card is found by whoever consumes it — the
+     * rule that fills a surface with this name is the card, whatever the CSS module hashed its
+     * local name to on this build.
+     */
+    const HOVER_CARD_SURFACE = '--dsw-alias-hovercard-bg';
 
     /** The class tokens a selector's subject names, without its pseudo-classes. */
     function selectorClasses(selector) {
       const subject = selector.split(/\s*[>+~]\s*|\s+/).filter(Boolean).pop() ?? '';
       return [...subject.matchAll(/\.(-?[_A-Za-z][\w-]*)/g)].map(match => match[1]);
-    }
-
-    /** Whether a built class token carries a local name: `YDXeBa_hoverTitle` carries `hoverTitle`. */
-    function carriesLocal(token, local) {
-      return new RegExp(`(?:^|_)${local}(?:_|$)`).test(token);
     }
 
     /**
@@ -758,10 +756,9 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Read the hover card's own selector, the selectors of its ink, the tooltip's bubble and the
-     * toast's action link out of the live stylesheets. The card is found by what it declares — the
-     * one rule that owns `--dsw-hovercard-bg` — the ink by the local names the app's CSS modules
-     * give them, the two notices by the surface they paint.
+     * Read the hover card's own selector, the tooltip's bubble and the toast's action link out of
+     * the live stylesheets. The card is found by the surface it paints — the one rule that fills a
+     * background with `--dsw-alias-hovercard-bg` — and the two notices by the surface they paint.
      */
     function readSurfaces() {
       const rules = [];
@@ -775,12 +772,16 @@ window.__ModuleLoader__.load({
         }
       }
       const card = new Set();
-      const ink = new Map();
       const floaters = new Map(FROSTED_FLOATERS.map(name => [name, []]));
       const takeover = new Set();
       const deepseek = [];
       for (const { classes, text } of rules) {
-        if (text.includes('--dsw-hovercard-bg')) {
+        /**
+         * The card's own rule paints the hover-card surface. A theme sheet declares that name
+         * without ever seeing it as a value (its own value is the static palette), so the
+         * declaration form never matches here — only the consumer does.
+         */
+        if (text.includes(`var(${HOVER_CARD_SURFACE})`)) {
           for (const token of classes) card.add(token);
         }
         /**
@@ -799,15 +800,7 @@ window.__ModuleLoader__.load({
           const list = floaters.get(name);
           for (const token of classes) if (!list.includes(token)) list.push(token);
         }
-        if (!/color\s*:/.test(text)) continue;
-        for (const entry of HOVER_CARD_INK) {
-          const tokens = classes.filter(token => carriesLocal(token, entry.local));
-          if (tokens.length === 0) continue;
-          const list = ink.get(entry.local) ?? [];
-          for (const token of tokens) if (!list.includes(token)) list.push(token);
-          ink.set(entry.local, list);
-        }
-        if (text.includes('var(--dsw-static-deepseek-400)')) deepseek.push(classes);
+        if (/color\s*:/.test(text) && text.includes('var(--dsw-static-deepseek-400)')) deepseek.push(classes);
       }
       // The card's own module also holds the `preview` and `media` variants, which paint a surface
       // of their own; the card's rim, blur and elevation stay off them.
@@ -833,7 +826,6 @@ window.__ModuleLoader__.load({
       }
       return {
         card: [...card],
-        ink,
         tooltip: floaters.get('--dsw-alias-tooltip-bg'),
         floaters,
         variants: [...variants],
@@ -922,16 +914,16 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The compat stylesheet: the card's surface hands the decision back to the body layer, the
-     * card's text follows the theme's label tokens, the two notices get the ink their new
-     * surfaces no longer carry, and the see-through floaters get the material's blur. `inherit` is
-     * what makes the body token land — the card's own `#2C2C2E` declaration is what a body value
-     * could never beat.
+     * The compat stylesheet: the card gets the material's blur and a rim, the two notices get the
+     * ink their new surfaces no longer carry, and the see-through floaters get the same blur. The
+     * card's surface and its ink are tokens, so the layer writes them inline like every other
+     * surface — no `inherit` hand-over is needed, and no rule here has to know what a line inside
+     * the card is called.
      *
-     * Every part stands on its own: the card is found by the rule that owns `--dsw-hovercard-bg`, and
-     * a build that stopped shipping that card must not take the notices, the floaters or the
-     * selection down with it. So the sheet is assembled from parts, and a part with no target is
-     * simply left out.
+     * Every part stands on its own: the card is found by the rule that paints the hover-card
+     * surface, and a build that stopped shipping that card must not take the notices, the floaters
+     * or the selection down with it. So the sheet is assembled from parts, and a part with no
+     * target is simply left out.
      */
     function compatSheet() {
       const found = readSurfaces();
@@ -943,22 +935,16 @@ window.__ModuleLoader__.load({
         '::selection { background-color: var(--dsw-material-selection); color: var(--dsw-alias-label-primary); }',
       ];
       if (found.card.length > 0) {
-        const card = found.card.map(token => `.${token}`).join(', ');
         const notVariant = found.variants.map(token => `:not(.${token})`).join('');
         const surface = found.card.map(token => `.${token}${notVariant}`).join(', ');
         rules.push(
-          `${card} { --dsw-hovercard-bg: inherit !important; }`,
-          // The card was a bare slab on a tinted canvas. A rim gives it an edge, the material's own
-          // blur gives it the frosted read of every other card, and the inset highlight is the light
-          // that lands on a top edge.
+          // The card is a see-through slab on a see-through sidebar. A rim gives it an edge, the
+          // material's own blur gives it the frosted read of every other card — without it the
+          // sidebar's own rows read straight through the card's copy — and the inset highlight is
+          // the light that lands on a top edge.
           `${surface} { border: 1px solid var(--dsw-alias-border-l3) !important; backdrop-filter: var(--dsw-menu-backdrop-filter) !important; -webkit-backdrop-filter: var(--dsw-menu-backdrop-filter) !important; }`,
           `${surface} { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55), var(--dsw-shadow-lv3) !important; }`,
           `body[data-ds-dark-theme] ${surface} { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), var(--dsw-shadow-lv3) !important; }`,
-          // Every line inside the card reads as the theme's primary ink, so a part this package does
-          // not know still reads against the new surface. `:where()` leaves this rule at the same
-          // specificity as the part rules below it, and the later rule wins — without it the blanket
-          // rule would outrank every part and flatten the card's three ink steps into one.
-          `${card} :where(*:not(svg)) { color: var(--dsw-alias-label-primary) !important; }`,
         );
         // The card's own variants paint a surface of their own, so the rim and the elevation stay off
         // them — but they are see-through surfaces too, and a translucent panel with no blur is only a
@@ -967,15 +953,6 @@ window.__ModuleLoader__.load({
         if (found.variants.length > 0) {
           const variants = found.variants.map(token => `.${token}`).join(', ');
           rules.push(`${variants} { backdrop-filter: var(--dsw-menu-backdrop-filter) !important; -webkit-backdrop-filter: var(--dsw-menu-backdrop-filter) !important; }`);
-        }
-        for (const entry of HOVER_CARD_INK) {
-          const tokens = found.ink.get(entry.local);
-          if (!tokens || tokens.length === 0) continue;
-          rules.push(`${tokens.map(token => `.${token}`).join(', ')} { color: var(${entry.ink}) !important; }`);
-        }
-        const title = found.ink.get('hoverTitle');
-        if (title && title.length > 0) {
-          rules.push(`${title.map(token => `.${token}`).join(', ')} { font-weight: 600 !important; }`);
         }
       }
       if (found.tooltip.length > 0) {

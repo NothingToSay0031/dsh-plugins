@@ -9,7 +9,7 @@ window.__ModuleLoader__.load({
 
     const zh = {
       panel: '自主协作',
-      subtitle: '按任务难度设置模型顺序，供 Agent 自主协作时选用。',
+      subtitle: '按任务难度排列模型；每个可用模型对应一个难度档位。',
       refresh: '刷新',
       refreshing: '刷新中…',
       loading: '正在加载…',
@@ -18,7 +18,7 @@ window.__ModuleLoader__.load({
       invalidRanking: 'Host 返回的模型排序无效，当前未保存顺序没有被替换。',
       unknownError: '请求失败，请重试。',
       active: '可用模型',
-      activeHelp: '从上到下：由简单任务到困难任务。Agent 按任务难度选择模型，也可以直接指定这里的一个模型；停用区模型不能被指定。',
+      activeHelp: '从上到下：由简单任务到困难任务。难度档位 1..N 与可用模型一一对应，不会把多个难度折叠到同一个模型。Agent 也可以直接指定这里的一个模型；停用区模型不能被指定。',
       dragHelp: '拖动模型可调整顺序或在两个区域间移动；也可使用每行的上移、下移、停用和启用按钮。',
       inactive: '停用模型',
       inactiveHelp: '这里的模型不会被使用，也不能被 Agent 直接指定。拖回上方可用区或点击启用，可重新加入排序。',
@@ -49,7 +49,7 @@ window.__ModuleLoader__.load({
 
     const en = {
       panel: 'Autonomous Collaboration',
-      subtitle: 'Rank models by task difficulty for autonomous collaboration.',
+      subtitle: 'Rank models by task difficulty; each active model gets its own difficulty tier.',
       refresh: 'Refresh',
       refreshing: 'Refreshing…',
       loading: 'Loading…',
@@ -58,7 +58,7 @@ window.__ModuleLoader__.load({
       invalidRanking: 'The Host returned an invalid ranking. Your unsaved order has not been replaced.',
       unknownError: 'The request failed. Please retry.',
       active: 'Active models',
-      activeHelp: 'Top to bottom: simple tasks to difficult tasks. Agents choose a model by task difficulty.',
+      activeHelp: 'Top to bottom: simple tasks to difficult tasks. Difficulty tiers 1..N map one-to-one to active models, so a tier never repeats a model. Agents may also name an active model directly; disabled models cannot be selected.',
       dragHelp: 'Drag models to reorder or move between areas, or use each row’s Move up, Move down, Disable and Enable buttons.',
       inactive: 'Disabled models',
       inactiveHelp: 'These models are not used. Drag one back to the active area or choose Enable to use it again.',

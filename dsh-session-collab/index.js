@@ -6,17 +6,17 @@ export const name = 'local-session-collab';
 export const inject = ['agents', 'sessions', 'sessionController', 'sessionQuery', 'sessionProjections', 'workspaceRegistry', 'storageDomain', 'tools', 'systemPrompt', 'llm', 'agentPresets', 'connection', 'sessionTitle'];
 const string = z.string().trim().min(1);
 export const inputs = {
-  collab_discover: z.object({ query: z.string().max(200).optional(), name: string.max(100).optional(), workspace: string.max(1000).optional() }).strict(),
-  collab_send: z.object({ target_session_id: string.max(200).optional(), target_name: string.max(100).optional(), target_workspace: string.max(1000).optional(), target_context: string.max(1000).optional(), text: string.max(16000), request_id: string.max(160) }).strict()
-    .refine(value => !!value.target_session_id || !!value.target_name, 'Supply target_name or target_session_id')
-    .refine(value => !value.target_context || !!value.target_session_id, 'target_context requires an exact target_session_id'),
+  collab_discover: z.object({ query: z.string().max(200).optional(), name: string.max(100).optional(), session_id: string.max(200).optional(), workspace: string.max(1000).optional(), include_workspaces: z.boolean().optional() }).strict(),
+  collab_send: z.object({ target_name: string.max(100).optional(), target_session_id: string.max(200).optional(), target_workspace: string.max(1000).optional(), text: string.max(16000), request_id: string.max(160) }).strict()
+    .refine(value => (value.target_name === undefined) !== (value.target_session_id === undefined), 'Supply exactly one of target_name or target_session_id'),
+
   collab_reply: z.object({ message_id: string.max(200), text: string.max(16000), request_id: string.max(160) }).strict(),
-  collab_inbox: z.object({ before: string.optional(), thread_id: string.optional() }).strict(),
-  collab_models: z.object({}).strict(),
-  collab_create_session: z.object({ workspace_id: string.optional(), title: string.max(100), difficulty: z.number().int().min(1).max(5).optional(), model: string.max(300).optional(), reasoning_effort: string.max(100).optional(), request_id: string.max(160), prompt: string.max(16000).optional(), agent_preset: string.max(100).optional() }).strict()
+  collab_history: z.object({ before: string.optional() }).strict(),
+  collab_models: z.object({ include_efforts: z.boolean().optional(), include_presets: z.boolean().optional() }).strict(),
+  collab_create_session: z.object({ workspace_id: string.optional(), title: string.max(100), difficulty: z.number().int().min(1).optional(), model: string.max(300).optional(), reasoning_effort: string.max(100).optional(), request_id: string.max(160), prompt: string.max(16000).optional(), agent_preset: string.max(100).optional() }).strict()
     .refine(value => (value.difficulty === undefined) !== (value.model === undefined), 'Supply exactly one of difficulty or model'),
 };
-const methods = { collab_discover: 'discover', collab_send: 'send', collab_reply: 'reply', collab_inbox: 'inbox', collab_models: 'models', collab_create_session: 'createSession' };
+const methods = { collab_discover: 'discover', collab_send: 'send', collab_reply: 'reply', collab_history: 'history', collab_models: 'models', collab_create_session: 'createSession' };
 const wire = value => JSON.parse(JSON.stringify(value));
 const toolNames = toolSchemas.map(schema => schema.name);
 
@@ -47,7 +47,7 @@ export async function apply(ctx) {
     async execute(raw, exec) {
       return wire(await service.run(() => service[methods[schema.name]](exec.agent, inputs[schema.name].parse(raw), exec.signal)));
     },
-    isConcurrencySafe: () => ['collab_discover', 'collab_models', 'collab_inbox'].includes(schema.name),
+    isConcurrencySafe: () => ['collab_discover', 'collab_models', 'collab_history'].includes(schema.name),
   });
 
   // Desktop and Web share the same authenticated owner-only /api exact-Fetch carrier.

@@ -1199,6 +1199,16 @@ function verifyPresetConfigs(docs, selected, normalized, snapshot, routes) {
       });
     }
     const policies = parsePolicies(basic, `preset-${presetId}.compaction-basic.modelPolicies`);
+    for (const policy of policies) {
+      const key = policyKey(policy.provider, policy.model);
+      if (!modelByKey.has(key)) {
+        fail(`preset-${presetId}: 已移除模型 ${key} 的陈旧 policy 未清理`, {
+          code: 'compaction-targets/stale-policy',
+          preset: presetId,
+          policy: key,
+        });
+      }
+    }
     const policyByKey = new Map(policies.map(policy => [policyKey(policy.provider, policy.model), policy]));
     for (const row of normalized.rows) {
       if (!row.enabled) continue;
@@ -1654,11 +1664,6 @@ function buildNextConfig(snapshot, normalized) {
       thresholdRatio: row.thresholdRatio,
       ...(normalized.summarizerUnlimited ? { maxTokens: row.ownMaxTokens } : {}),
     }));
-  const presentKeys = new Set(snapshot.models.map(model => policyKey(model.provider, model.model)));
-  for (const policy of snapshot.unmanagedPolicies) {
-    if (presentKeys.has(policyKey(policy.provider, policy.model))) continue;
-    policies.push(policy);
-  }
   const unknown = {};
   for (const [key, value] of Object.entries(snapshot.config)) {
     if (!KNOWN_CONFIG_KEYS.has(key)) unknown[key] = value;
@@ -1798,6 +1803,9 @@ function verifySnapshot(snapshot, normalized, label) {
 }
 
 function sameSemantic(snapshot, normalized) {
+  // Even when every visible setting matches, a save must rewrite stale rows
+  // for models that disappeared from llm-pi-ai.
+  if (snapshot.unmanagedPolicies.length > 0) return false;
   if (snapshot.global.retainTokens !== normalized.retainTokens
     || snapshot.global.headroomTokens !== normalized.headroomTokens
     || snapshot.global.summarizerMaxTokens !== normalized.summarizerMaxTokens) {

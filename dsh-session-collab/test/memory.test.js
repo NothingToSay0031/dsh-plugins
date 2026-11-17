@@ -70,7 +70,7 @@ function record(index, target) {
   };
 }
 
-test('a page of closed targets never reads more than a couple of Session logs at once', async () => {
+test('history output does not read target Session logs for delivery evidence', async () => {
   const logs = new Map();
   for (let index = 0; index < 20; index += 1) {
     const target = `closed-${index}`;
@@ -78,20 +78,21 @@ test('a page of closed targets never reads more than a couple of Session logs at
   }
   const f = fixture({ logs });
   const records = Array.from({ length: 20 }, (_, index) => record(index, `closed-${index}`));
-  const page = await f.service.publicRecords(records);
+  const page = f.service.historyEntries(records, 'caller');
   assert.equal(page.length, 20);
-  assert.ok(f.stats.peak <= 2, `expected at most 2 concurrent log reads, saw ${f.stats.peak}`);
+  assert.equal(f.stats.opened, 0);
 });
 
-test('one target log serves every record that targets it', async () => {
+test('delivery evidence reconciliation still batches log reads by target', async () => {
   const logs = new Map([['closed-1', [
     { type: 'agent/inbox/spliced', seq: 1, data: { inserted: [{ id: 'collab-message-0' }, { id: 'collab-message-1' }] } },
   ]]]);
   const f = fixture({ logs });
-  const page = await f.service.publicRecords([record(0, 'closed-1'), record(1, 'closed-1')]);
+  const records = [record(0, 'closed-1'), record(1, 'closed-1')];
+  await f.service.resolveEvidence(records);
   assert.equal(f.stats.opened, 1);
-  assert.equal(page[0].evidence.acceptedSeq, 1);
-  assert.equal(page[1].evidence.acceptedSeq, 1);
+  assert.equal(f.service.evidence.get(records[0].id).evidence.acceptedSeq, 1);
+  assert.equal(f.service.evidence.get(records[1].id).evidence.acceptedSeq, 1);
 });
 
 test('the acceptance evidence of a read log is remembered instead of read again', async () => {
@@ -99,8 +100,8 @@ test('the acceptance evidence of a read log is remembered instead of read again'
   const f = fixture({ logs });
   const records = [record(0, 'closed-1')];
   await f.requests.put(records[0].id, records[0]);
-  await f.service.publicRecords(records);
-  await f.service.publicRecords(records);
+  await f.service.resolveEvidence(records);
+  await f.service.resolveEvidence(records);
   assert.equal(f.stats.opened, 1);
   const stored = f.requests.get(records[0].id);
   assert.equal(stored.evidence.acceptedSeq, 1);

@@ -962,6 +962,29 @@ test('the generated rows live in the home layer and the profile file is never wr
   assert.equal(basic.config.headroomTokens, 8192);
 });
 
+test('removed model policies are cleaned from generated home rows without writing the profile', async () => {
+  const fixture = await setup();
+  const homePatchPath = path.join(fixture.home, 'cordis.patch.yml');
+  const withGone = HOME_LAYER.replace(
+    '                  model: model-a\n                  thresholdRatio: 0.3\n',
+    '                  model: model-a\n                  thresholdRatio: 0.3\n                - provider: demo\n                  model: model-gone\n                  thresholdRatio: 0.3\n',
+  );
+  await writeFile(fixture.patchPath, HAND_WRITTEN_PROFILE, 'utf8');
+  await writeFile(homePatchPath, withGone, 'utf8');
+  const options = { env: fixture.env, homePatchPath, presets: PRESET_SOURCES };
+  const profileBefore = await readFile(fixture.patchPath, 'utf8');
+  const snapshot = await getSnapshot(options);
+  const body = bodyFor(snapshot);
+  body.presets = ['standard'];
+
+  const result = await applyTargets(body, options);
+
+  assert.equal(result.changed, true);
+  assert.equal(await readFile(fixture.patchPath, 'utf8'), profileBefore);
+  const homeAfter = await readFile(homePatchPath, 'utf8');
+  assert.equal(homeAfter.includes('model: model-gone'), false);
+});
+
 test('the home layer wins over the profile layer', async () => {
   const fixture = await setup();
   const homePatchPath = path.join(fixture.home, 'cordis.patch.yml');
@@ -1131,10 +1154,8 @@ test('no separate limit needs at least one enabled model', async () => {
   );
 });
 
-test('an unmanaged policy row does not break the per-model mode', async () => {
+test('a removed model policy is deleted on save while model-specific caps remain detectable', async () => {
   const fixture = await setup();
-  // A model that left the provider table keeps its policy row; the mode is
-  // detected from the rows the page manages, not from every row in the file.
   const withGone = FIXTURE.replace(
     '                  model: model-a\n                  thresholdRatio: 0.3\n',
     '                  model: model-a\n                  thresholdRatio: 0.3\n                - provider: demo\n                  model: model-gone\n                  thresholdRatio: 0.3\n',
@@ -1145,10 +1166,30 @@ test('an unmanaged policy row does not break the per-model mode', async () => {
 
   await applyTargets({ ...bodyFor(snapshot), summarizerMaxTokens: 'model' }, { env: fixture.env });
   const again = await getSnapshot({ env: fixture.env });
-  assert.equal(again.global.summarizerUnlimited, true, 'the gone model row does not hide the mode');
+  assert.equal(again.global.summarizerUnlimited, true, 'the removed model row does not hide the mode');
 
   const after = await readFile(fixture.patchPath, 'utf8');
-  assert.equal(after.includes('model: model-gone'), true, 'the unmanaged row survives the rewrite');
+  assert.equal(after.includes('model: model-gone'), false, 'the removed model policy is deleted');
+  const docs = __test.parseDocuments(after);
+  const basic = docs.find(entry => entry.id === 'preset-standard').config.plugins
+    .find(entry => entry.id === 'compaction').config
+    .find(entry => entry.id === 'compaction-basic');
+  assert.deepEqual(basic.config.modelPolicies.map(policy => policy.model), ['model-a']);
+});
+
+test('an unchanged save still removes policies for models no longer declared', async () => {
+  const fixture = await setup();
+  const withGone = FIXTURE.replace(
+    '                  model: model-a\n                  thresholdRatio: 0.3\n',
+    '                  model: model-a\n                  thresholdRatio: 0.3\n                - provider: demo\n                  model: model-gone\n                  thresholdRatio: 0.3\n',
+  );
+  await writeFile(fixture.patchPath, withGone, 'utf8');
+  const snapshot = await getSnapshot({ env: fixture.env });
+  const result = await applyTargets(bodyFor(snapshot), { env: fixture.env });
+
+  assert.equal(result.changed, true, 'stale policy cleanup is a real patch change');
+  assert.equal(result.backupPath !== null, true, 'cleanup follows the regular backup flow');
+  assert.equal((await readFile(fixture.patchPath, 'utf8')).includes('model: model-gone'), false);
 });
 
 

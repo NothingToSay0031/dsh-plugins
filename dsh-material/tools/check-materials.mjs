@@ -38,8 +38,8 @@ const SESSION_DIR = join(REPO, 'packages/session');
 const clientSource = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
 const block = clientSource.match(/\/\* __MATERIALS_START__ \*\/([\s\S]*?)\/\* __MATERIALS_END__ \*\//);
 if (!block) throw new Error('MATERIALS markers not found in client.js');
-const { MATERIALS, FROST_SURFACES, FROST_SOLID, FROST_BLUR, FROST_MIN_ALPHA, FROSTED_FLOATERS, HOVER_CARD_INK, frostify, captionSafe, buildLayer } = new Function(
-  `${block[1]}\nreturn { MATERIALS, FROST_SURFACES, FROST_SOLID, FROST_BLUR, FROST_MIN_ALPHA, FROSTED_FLOATERS, HOVER_CARD_INK, frostify, captionSafe, buildLayer };`,
+const { MATERIALS, FROST_SURFACES, FROST_SOLID, FROST_BLUR, FROST_MIN_ALPHA, FROSTED_FLOATERS, frostify, captionSafe, buildLayer } = new Function(
+  `${block[1]}\nreturn { MATERIALS, FROST_SURFACES, FROST_SOLID, FROST_BLUR, FROST_MIN_ALPHA, FROSTED_FLOATERS, frostify, captionSafe, buildLayer };`,
 )();
 
 /* ---------- stylesheet scan ---------- */
@@ -457,12 +457,14 @@ const TEXT_ON = [
     labels: ['--dsw-alias-label-primary', '--dsw-alias-label-secondary'],
   },
   {
-    // The Sidebar session hover card: the compat stylesheet hands the card's own surface back to
-    // the body layer, so the card carries this layer's glass and the same ink as every other
-    // themed surface. The card's status line keeps the tertiary step — the app's dimmed metadata
-    // step, which no light surface in this table pairs with either.
-    surface: /^--dsw-hovercard-bg$/,
-    labels: ['--dsw-alias-label-primary', '--dsw-alias-label-secondary'],
+    // The Sidebar session hover card. The platform paints it as a fixed dark slab in both themes;
+    // this layer writes the surface and its three ink steps, because the card's own rule paints
+    // `--dsw-alias-hovercard-bg` and its parts read `--dsw-alias-hovercard-label-*` — all four are
+    // aliases declared on `body`, so the body layer reaches them. The status line keeps the
+    // tertiary step — the app's dimmed metadata step, which no light surface in this table pairs
+    // with either.
+    surface: /^--dsw-alias-hovercard-bg$/,
+    labels: ['--dsw-alias-hovercard-label-primary', '--dsw-alias-hovercard-label-secondary'],
   },
   {
     surface: /^--dsw-alias-(brand-primary|button-primary-(fill|hover)|button-(info-fill|info-hover|contrast-fill))$/,
@@ -571,9 +573,12 @@ function flatten(value, backing) {
 /**
  * The colours one label token can present in one mode. This package paints the ink of the notices
  * it re-themes, so a label token the layer writes is read from the layer; every other label keeps
- * the built-in theme's value. A gradient contributes each of its stops.
+ * the built-in theme's value. A gradient contributes each of its stops, and a `var()` value is
+ * followed the way the browser resolves it — through this layer's own tokens first, then the
+ * built-in ones — so a token the layer hands back to the theme (`--dsw-alias-hovercard-label-*`)
+ * is measured as the ink that is actually painted, not as the component's built-in value.
  */
-function labelColors(label, mode, table, builtin) {
+function labelColors(label, mode, table, builtin, seen = new Set()) {
   if (label.startsWith('#')) {
     const parsed = parseColor(label);
     return parsed ? [parsed] : [];
@@ -584,22 +589,16 @@ function labelColors(label, mode, table, builtin) {
     if (direct) return [direct];
     const stops = [...own.matchAll(COLOR_TOKEN)].map(match => parseColor(match[0])).filter(Boolean);
     if (stops.length > 0) return stops;
+    const link = /^var\(\s*(--[\w-]+)\s*\)$/.exec(own.trim());
+    if (link && !seen.has(label)) {
+      seen.add(label);
+      const followed = labelColors(link[1], mode, table, builtin, seen);
+      if (followed.length > 0) return followed;
+    }
   }
   const resolved = builtin.resolveValue(label);
   return resolved ? [resolved] : [];
 }
-
-/**
- * Variables that are not theme tokens: the component declares them on the element it paints, so
- * the body layer cannot reach them and this package reaches them through its compat stylesheet
- * instead. Each entry names where the app declares it and how it is reached.
- */
-const COMPONENT_LOCAL = new Map([
-  [
-    '--dsw-hovercard-bg',
-    'ui-primitives/HoverCard.module.css declares it on the card element (a fixed #2C2C2E); the compat stylesheet hands it back to the body layer with `--dsw-hovercard-bg: inherit`',
-  ],
-]);
 
 /**
  * Variables this package owns end to end: the platform declares no such token, and nothing in
@@ -613,11 +612,6 @@ const PLUGIN_LOCAL = new Map([
     'the text-selection wash: the platform has no selection token, so this package writes its own and the compat stylesheet applies it to `::selection`',
   ],
 ]);
-
-/** The class tokens a selector names, however the CSS modules hashed them. */
-function selectorClasses(selector) {
-  return [...(selector ?? '').matchAll(/\.(-?[_A-Za-z][\w-]*)/g)].map(match => match[1]);
-}
 
 const problems = [];
 const seenProblems = new Set();
@@ -643,23 +637,6 @@ function declaredKind(name) {
 }
 
 /**
- * The component-local variables this package writes. They are not theme tokens, so the audit skips
- * ui-theme's declaration check for them — but the app must still mention them, and the compat
- * stylesheet that reaches them must still be there, or the layer paints nothing.
- */
-for (const [name, where] of COMPONENT_LOCAL) {
-  const declaredByComponent = (localRebinds.get(name) ?? []).length > 0;
-  const readByComponent = (consumed.get(name) ?? []).length > 0;
-  if (!declaredByComponent && !readByComponent) {
-    track('P1', `${name}: the app no longer mentions it — the compat stylesheet has nothing to override, and the surface stays the built-in one`);
-  } else if (!clientSource.includes('compatSheet')) {
-    track('P1', `${name}: the layer writes it, but client.js has no compat stylesheet — the body value never reaches the element that paints it`);
-  } else {
-    note(`${name}: ${where}`);
-  }
-}
-
-/**
  * The two notices re-themed through the compat stylesheet: the tooltip's ink and the toast's action
  * link are literal colours in the component, so the stylesheet has to hand them back to the theme.
  * A component that stops naming them means the stylesheet's rule for them no longer lands. The
@@ -674,16 +651,21 @@ if (!clientSource.includes('var(--dsw-static-deepseek-400)')) {
 }
 
 /**
- * The hover card's ink: the app names its parts in the CSS modules, and this package matches those
- * names to restore the hierarchy. A name that disappeared is not fatal — the card's own blanket rule
- * still gives every line inside it the theme's primary ink — but the hierarchy is gone with it.
+ * The Sidebar session hover card: its surface and ink are tokens, so the token layer is what stops
+ * it being a dark slab — but the blur and the rim still come from the compat stylesheet, and that
+ * sheet finds the card by the rule that paints the surface. A build that renames the token takes
+ * the card's ink and its frost with it, and the card goes back to a see-through slab with the
+ * sidebar's rows reading through it.
  */
-for (const entry of HOVER_CARD_INK) {
-  const pattern = new RegExp(`(?:^|_)${entry.local}(?:_|$)`);
-  const named = clientRules.some(rule => selectorClasses(rule.selector).some(token => pattern.test(token)));
-  if (!named) {
-    note(`hover card: the app no longer names a \`${entry.local}\` class — that line falls back to the primary ink`);
-  }
+const HOVER_CARD_SURFACE = '--dsw-alias-hovercard-bg';
+const paintsHoverCard = rule => rule.declarations.some(declaration => /^background(-color|-image)?$/.test(declaration.property)
+  && declaration.value.includes(`var(${HOVER_CARD_SURFACE})`));
+if (!clientRules.some(paintsHoverCard)) {
+  track('P1', `the app no longer paints \`var(${HOVER_CARD_SURFACE})\` on a card — the compat stylesheet has no card to frost, and the card stays a film over the sidebar`);
+} else if (!clientSource.includes('HOVER_CARD_SURFACE')) {
+  track('P1', 'client.js no longer discovers the hover card by the surface it paints — the card keeps no blur');
+} else {
+  note(`the Sidebar hover card: frosted and rimmed by the compat stylesheet (found by \`var(${HOVER_CARD_SURFACE})\`)`);
 }
 
 /**
@@ -781,7 +763,7 @@ for (const [preset, tokens] of Object.entries(MATERIALS)) {
 
     const declarations = declared.get(name) ?? [];
     if (declarations.length === 0) {
-      if (!COMPONENT_LOCAL.has(name) && !PLUGIN_LOCAL.has(name)) {
+      if (!PLUGIN_LOCAL.has(name)) {
         track('P1', `${preset} ${name}: ui-theme declares no such variable (typo, removed, or never existed)`);
       }
     } else if (declarations.some(entry => /(^|[\s,])body\s+\*|body \*/.test(entry.selector))) {
